@@ -13,6 +13,18 @@
 {% set llm_custom = not is_admin and 'llm' in custom %}
 <form action="/integrations" method="post" class="integration-stack">
   <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+  {% if is_admin %}
+  <section class="integration-card verify-methods-card">
+    <div class="integration-head"><div class="integration-number">00</div><div><span class="eyebrow">VERIFICATION METHODS</span><h2>允许使用的查验方式</h2><p>关闭“本地 OCR / LLM”回退后，发票云查验失败的发票直接进入人工复核，不再调用本地识别。</p></div></div>
+    <div class="form-grid three">
+      <label class="toggle-row"><input type="checkbox" name="verify_provider" {{ 'checked' if values.verify_provider == 'true' else '' }}><span></span><div><strong>发票云查验</strong><small>金蝶标准版 / 旗舰版</small></div></label>
+      <label class="toggle-row"><input type="checkbox" name="verify_ocr" {{ 'checked' if values.verify_ocr == 'true' else '' }}><span></span><div><strong>本地 OCR 回退</strong><small>PDF 文本层 / Tesseract</small></div></label>
+      <label class="toggle-row"><input type="checkbox" name="verify_llm" {{ 'checked' if values.verify_llm == 'true' else '' }}><span></span><div><strong>LLM 双源复核</strong><small>需同时启用 LLM 集成</small></div></label>
+    </div>
+  </section>
+  {% else %}
+  <div class="notice subtle"><b>查验方式</b><p>当前允许：{{ verify_mode_text }}。此项由管理员统一配置。</p></div>
+  {% endif %}
   <section class="integration-card kingdee-card">
     <div class="integration-head"><div class="integration-number">01</div><div><span class="eyebrow">PRIMARY</span><h2>金蝶发票云 · 识别查验</h2><p>调用旗舰版 <span class="mono">recognitionCheck</span>；凭据完整且启用时优先使用。</p></div>
       {% if not is_admin %}<label class="switch"><input type="checkbox" name="kingdee_custom" value="1" {{ 'checked' if kd_custom else '' }} data-settings-toggle="kingdee-settings"><span></span><b>自定义配置</b></label>{% else %}<label class="switch"><input type="checkbox" name="kingdee_enabled" {{ 'checked' if values.kingdee_enabled == 'true' else '' }} data-settings-toggle="kingdee-settings"><span></span><b>启用</b></label>{% endif %}

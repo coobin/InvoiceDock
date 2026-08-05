@@ -40,6 +40,9 @@ INTEGRATION_DEFAULTS = {
     "piaozone_sign_method": "MD5",
     "piaozone_token_path": "/base/oauth/token",
     "piaozone_invoice_check_path": "/m3/bill/invoice/img/Check/info",
+    "verify_provider": "true",
+    "verify_ocr": "true",
+    "verify_llm": "true",
 }
 
 KINGDEE_KEYS = frozenset(key for key in INTEGRATION_DEFAULTS if key.startswith("kingdee_"))

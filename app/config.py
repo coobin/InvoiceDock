@@ -55,6 +55,12 @@ class Settings(BaseSettings):
     llm_model: str = ""
     llm_vision: str = ""
 
+    # 查验方式开关（环境变量可覆盖）：发票云 / 本地 OCR / LLM 是否允许使用。
+    # 关闭本地回退后，发票云查验失败的发票直接进入人工复核。
+    verify_provider: str = "true"
+    verify_ocr: str = "true"
+    verify_llm: str = "true"
+
     # 金蝶发票云 · 标准版（Piaozone）override。使用 client_id/client_secret
     # 签名授权（/base/oauth/token），识别查验走 /m3/bill/invoice/img/Check/info。
     piaozone_enabled: str = ""

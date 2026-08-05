@@ -48,6 +48,7 @@ from app.services.ingestion import extract_zip_candidates, ingest_bytes
 from app.services.mail_service import scan_all_mailboxes, sync_mailbox, test_mailbox
 from app.services.settings_service import (
     INTEGRATION_KEYS,
+    as_bool,
     clear_user_integration,
     get_env_keys,
     get_integrations,
@@ -823,11 +824,19 @@ def integrations_page(request: Request, db: Session = Depends(get_db)):
         for integration, keys in INTEGRATION_KEYS.items():
             for key in keys:
                 field_values[key] = own_values.get(key, "") if integration in custom else ""
+    mode_parts = []
+    if as_bool(values.get("verify_provider", "true")):
+        mode_parts.append("发票云")
+    if as_bool(values.get("verify_ocr", "true")):
+        mode_parts.append("本地 OCR")
+    if as_bool(values.get("verify_llm", "true")):
+        mode_parts.append("LLM 双源复核")
+    verify_mode_text = " + ".join(mode_parts) if mode_parts else "未启用任何查验方式"
     return templates.TemplateResponse(
         request,
         "integrations.html",
         context(request, user, page="integrations", values=values, field_values=field_values,
-                custom=custom, env_keys=env_keys, is_admin=is_admin, oidc={
+                custom=custom, env_keys=env_keys, is_admin=is_admin, verify_mode_text=verify_mode_text, oidc={
             "enabled": settings.oidc_enabled, "issuer": settings.oidc_issuer, "client_id": settings.oidc_client_id,
             "callback": f"{settings.app_base_url}/auth/oidc/callback",
         }),
@@ -842,8 +851,12 @@ async def integrations_save(request: Request, db: Session = Depends(get_db)):
     if user.role == "admin":
         values = {key: str(value) for key, value in form.items() if key != "csrf_token"}
         values["kingdee_enabled"] = "true" if form.get("kingdee_enabled") == "on" else "false"
+        values["piaozone_enabled"] = "true" if form.get("piaozone_enabled") == "on" else "false"
         values["llm_enabled"] = "true" if form.get("llm_enabled") == "on" else "false"
         values["llm_vision"] = "true" if form.get("llm_vision") == "on" else "false"
+        values["verify_provider"] = "true" if form.get("verify_provider") == "on" else "false"
+        values["verify_ocr"] = "true" if form.get("verify_ocr") == "on" else "false"
+        values["verify_llm"] = "true" if form.get("verify_llm") == "on" else "false"
         update_integrations(db, values)
         record_audit(db, request, user, "integrations.update", details={"keys": sorted(values)})
         flash(request, "全局集成配置已加密保存")

@@ -450,9 +450,12 @@ def process_invoice(invoice_id: str) -> None:
         db.commit()
         path = settings.upload_dir / invoice.stored_name
         config = get_integrations(db, user_id=invoice.owner_id)
+        provider_allowed = as_bool(config.get("verify_provider", "true"))
+        ocr_allowed = as_bool(config.get("verify_ocr", "true"))
+        llm_allowed = as_bool(config.get("verify_llm", "true"))
         provider_error = ""
         try:
-            if _piaozone_complete(config):
+            if provider_allowed and _piaozone_complete(config):
                 try:
                     fields, raw = verify_with_piaozone(path, config)
                     _apply_fields(invoice, fields)
@@ -465,7 +468,7 @@ def process_invoice(invoice_id: str) -> None:
                     provider_error = str(exc)
                     db.add(JobLog(level="warning", event="piaozone.fallback", message=provider_error, details={"invoice_id": invoice.id}))
 
-            if invoice.status != "verified" and _kingdee_complete(config):
+            if provider_allowed and invoice.status != "verified" and _kingdee_complete(config):
                 try:
                     fields, raw = verify_with_kingdee(path, config)
                     _apply_fields(invoice, fields)
@@ -479,36 +482,56 @@ def process_invoice(invoice_id: str) -> None:
                     db.add(JobLog(level="warning", event="kingdee.fallback", message=provider_error, details={"invoice_id": invoice.id}))
 
             if invoice.status != "verified":
-                text, structured, preview = extract_document(path, invoice.mime_type)
-                invoice.raw_text = text[:200000]
-                ocr_fields = parse_invoice_fields(text, structured)
-                invoice.ocr_data = ocr_fields
-                llm_enabled = as_bool(config.get("llm_enabled")) and bool(config.get("llm_base_url") and config.get("llm_model"))
-                if llm_enabled:
-                    try:
-                        preview_bytes = image_to_jpeg_bytes(preview) if preview else None
-                        llm_fields = extract_with_llm(text, preview_bytes, config)
-                        invoice.llm_data = llm_fields
-                        merged, conflicts, confidence, consistent = compare_sources(ocr_fields, llm_fields)
-                        _apply_fields(invoice, merged)
-                        invoice.conflicts = conflicts
-                        invoice.confidence = confidence
-                        invoice.verification_method = "dual"
-                        invoice.status = "consistent" if consistent else "review"
-                        if consistent:
-                            invoice.verified_at = datetime.now(UTC).replace(tzinfo=None)
-                    except Exception as exc:
+                if not (ocr_allowed or llm_allowed):
+                    invoice.verification_method = ""
+                    invoice.status = "review"
+                    invoice.error_message = "发票云查验未完成，且已禁用本地 OCR/LLM 回退，请人工处理"
+                else:
+                    text, structured, preview = extract_document(path, invoice.mime_type)
+                    invoice.raw_text = text[:200000]
+                    ocr_fields = parse_invoice_fields(text, structured) if ocr_allowed else {}
+                    invoice.ocr_data = ocr_fields
+                    llm_configured = as_bool(config.get("llm_enabled")) and bool(config.get("llm_base_url") and config.get("llm_model"))
+                    if llm_allowed and llm_configured:
+                        try:
+                            preview_bytes = image_to_jpeg_bytes(preview) if preview else None
+                            llm_fields = extract_with_llm(text, preview_bytes, config)
+                            invoice.llm_data = llm_fields
+                            if ocr_allowed:
+                                merged, conflicts, confidence, consistent = compare_sources(ocr_fields, llm_fields)
+                                _apply_fields(invoice, merged)
+                                invoice.conflicts = conflicts
+                                invoice.confidence = confidence
+                                invoice.verification_method = "dual"
+                                invoice.status = "consistent" if consistent else "review"
+                                if consistent:
+                                    invoice.verified_at = datetime.now(UTC).replace(tzinfo=None)
+                            else:
+                                _apply_fields(invoice, llm_fields)
+                                invoice.verification_method = "llm"
+                                invoice.status = "review"
+                        except Exception as exc:
+                            if ocr_allowed:
+                                _apply_fields(invoice, ocr_fields)
+                                invoice.verification_method = "ocr"
+                                invoice.status = "review"
+                                invoice.error_message = f"LLM 提取失败：{exc}"
+                            else:
+                                invoice.verification_method = ""
+                                invoice.status = "review"
+                                invoice.error_message = f"LLM 提取失败：{exc}"
+                    elif ocr_allowed:
                         _apply_fields(invoice, ocr_fields)
                         invoice.verification_method = "ocr"
                         invoice.status = "review"
-                        invoice.error_message = f"LLM 提取失败：{exc}"
-                else:
-                    _apply_fields(invoice, ocr_fields)
-                    invoice.verification_method = "ocr"
-                    invoice.status = "review"
-                    invoice.error_message = "未配置 LLM，已完成本地 OCR/文本提取，需人工复核"
+                        invoice.error_message = "未配置 LLM，已完成本地 OCR/文本提取，需人工复核"
+                    else:
+                        invoice.verification_method = ""
+                        invoice.status = "review"
+                        invoice.error_message = "LLM 未配置且已禁用本地 OCR，请人工处理"
                 if provider_error:
-                    invoice.error_message = f"金蝶查验未完成：{provider_error}；已回退到 {invoice.verification_method.upper()}"
+                    fallback_label = invoice.verification_method.upper() if invoice.verification_method else "人工复核"
+                    invoice.error_message = f"金蝶查验未完成：{provider_error}；已回退到 {fallback_label}"
 
             if invoice.category in ("", "未分类"):
                 invoice.category = categorize(
