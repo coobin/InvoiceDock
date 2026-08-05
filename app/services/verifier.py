@@ -197,12 +197,25 @@ def verify_with_kingdee(path: Path, config: dict[str, str]) -> tuple[dict[str, A
     invoice_data = _unwrap_invoice(raw.get("data"))
     if not invoice_data:
         raise IntegrationError("金蝶返回成功但未包含可识别的发票字段")
-    return map_external_fields(invoice_data), raw
+    fields = map_external_fields(invoice_data)
+    if not _provider_fields_valid(fields):
+        raise IntegrationError("金蝶旗舰版未识别到有效发票字段（缺少发票号码、金额或购销方）")
+    return fields, raw
 
 
 def _piaozone_complete(config: dict[str, str]) -> bool:
     required = ["piaozone_base_url", "piaozone_client_id", "piaozone_client_secret"]
     return as_bool(config.get("piaozone_enabled")) and all(config.get(key) for key in required)
+
+
+def _provider_fields_valid(fields: dict[str, Any]) -> bool:
+    """A verified invoice must carry real invoice identity: 发票号码, 金额,
+    and at least one party. Providers return success with placeholder data
+    for non-invoice documents (receipts, quotes, etc.), so presence of these
+    core fields is required before marking an invoice as 税务已查验."""
+    return bool(fields.get("invoice_number")) and fields.get("total_amount") is not None and bool(
+        fields.get("seller_name") or fields.get("buyer_name")
+    )
 
 
 def _piaozone_sign(client_id: str, client_secret: str, timestamp: str, method: str) -> tuple[str, int]:
@@ -316,8 +329,8 @@ def verify_with_piaozone(path: Path, config: dict[str, str]) -> tuple[dict[str, 
         "total_amount": _float(_pick(payload, "totalAmount", "amountWithTax", "totalTaxAmount", "invoiceAmount", "jshj")),
         "category": "未分类",
     }
-    if not fields["invoice_number"] and fields["total_amount"] is None:
-        raise IntegrationError("金蝶标准版未识别到核心发票字段")
+    if not _provider_fields_valid(fields):
+        raise IntegrationError("金蝶标准版未识别到有效发票字段（缺少发票号码、金额或购销方）")
     return fields, raw
 
 
