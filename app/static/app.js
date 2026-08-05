@@ -25,12 +25,13 @@
   const mailboxPreset = one('[data-mailbox-preset]');
   if (mailboxPreset) {
     const presets = {
-      qq: { name: 'QQ 邮箱', host: 'imap.qq.com', port: '993', ssl: true },
-      netease: { name: '网易邮箱', host: 'imap.163.com', port: '993', ssl: true },
-      chency: { name: '承希邮箱', host: 'imap.263.net', port: '993', ssl: true },
+      qq: { name: 'QQ 邮箱', host: 'imap.qq.com', port: '993', ssl: true, suffix: 'qq.com' },
+      netease: { name: '网易邮箱', host: 'imap.163.com', port: '993', ssl: true, suffix: '163.com' },
+      chency: { name: '承希邮箱', host: 'imap.263.net', port: '993', ssl: true, suffix: 'chencytech.com' },
     };
     const form = mailboxPreset.closest('form');
     const field = (name) => one(`input[name="${name}"]`, form);
+    const presetSuffixes = ['qq.com', 'vip.qq.com', '163.com', 'chencytech.com'];
     mailboxPreset.addEventListener('change', () => {
       const preset = presets[mailboxPreset.value];
       if (!preset) return;
@@ -44,7 +45,25 @@
         const presetNames = Object.values(presets).map((item) => item.name);
         if (!current || presetNames.includes(current)) name.value = preset.name;
       }
+      const username = field('username');
+      if (username) {
+        const current = username.value.trim();
+        const at = current.lastIndexOf('@');
+        if (at > 0 && presetSuffixes.includes(current.slice(at + 1).toLowerCase())) {
+          username.value = current.slice(0, at);
+        }
+        username.placeholder = `仅输入账号前缀，自动补 @${preset.suffix}`;
+      }
     });
+    const usernameInput = field('username');
+    if (usernameInput) {
+      usernameInput.addEventListener('blur', () => {
+        const preset = presets[mailboxPreset.value];
+        if (!preset) return;
+        const value = usernameInput.value.trim();
+        if (value && !value.includes('@')) usernameInput.value = `${value}@${preset.suffix}`;
+      });
+    }
   }
   all('dialog').forEach((dialog) => {
     dialog.addEventListener('click', (event) => {
