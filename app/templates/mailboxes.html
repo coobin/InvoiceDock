@@ -23,11 +23,10 @@
   <form action="/mailboxes" method="post" class="dialog-card">
     <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
     <div class="dialog-head"><div><span class="eyebrow">NEW MAILBOX</span><h2>连接收票邮箱</h2></div><button type="button" class="icon-button" data-dialog-close aria-label="关闭">×</button></div>
-    <div class="form-grid two"><label>显示名称<input name="name" required placeholder="例如：报销专用邮箱"></label><label>邮箱账号<input type="email" name="username" required placeholder="name@example.com"></label><label>IMAP 服务器<input name="host" required placeholder="imap.qq.com"></label><label>端口<input type="number" name="port" value="993" min="1" max="65535" required></label><label>文件夹<input name="folder" value="INBOX" required></label><label>授权码 / 应用密码<input type="password" name="password" autocomplete="new-password" required></label></div>
+    <div class="form-grid two"><label class="span-2">邮箱类型<select name="mailbox_type" data-mailbox-preset><option value="">自定义（手动填写）</option><option value="qq">QQ 邮箱</option><option value="netease">网易邮箱</option><option value="chency">承希邮箱</option></select></label><label>显示名称<input name="name" required placeholder="例如：报销专用邮箱"></label><label>邮箱账号<input type="email" name="username" required placeholder="name@example.com"></label><label>IMAP 服务器<input name="host" required placeholder="imap.qq.com"></label><label>端口<input type="number" name="port" value="993" min="1" max="65535" required></label><label>文件夹<input name="folder" value="INBOX" required></label><label>授权码 / 应用密码<input type="password" name="password" autocomplete="new-password" required></label></div>
     <label class="toggle-row"><input type="checkbox" name="use_ssl" checked><span></span><div><strong>使用 SSL/TLS</strong><small>推荐，常用端口为 993</small></div></label>
     <div class="notice subtle"><b>凭据说明</b><p>QQ/163 等邮箱通常要求“授权码”而不是网页登录密码。凭据使用实例密钥加密后写入数据库。</p></div>
     <button class="button primary wide" type="submit">保存邮箱连接</button>
   </form>
 </dialog>
 {% endblock %}
-

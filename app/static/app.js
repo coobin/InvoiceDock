@@ -22,6 +22,30 @@
   all('[data-dialog-close]').forEach((button) => {
     button.addEventListener('click', () => button.closest('dialog')?.close());
   });
+  const mailboxPreset = one('[data-mailbox-preset]');
+  if (mailboxPreset) {
+    const presets = {
+      qq: { name: 'QQ 邮箱', host: 'imap.qq.com', port: '993', ssl: true },
+      netease: { name: '网易邮箱', host: 'imap.163.com', port: '993', ssl: true },
+      chency: { name: '承希邮箱', host: 'imap.263.net', port: '993', ssl: true },
+    };
+    const form = mailboxPreset.closest('form');
+    const field = (name) => one(`input[name="${name}"]`, form);
+    mailboxPreset.addEventListener('change', () => {
+      const preset = presets[mailboxPreset.value];
+      if (!preset) return;
+      field('host').value = preset.host;
+      field('port').value = preset.port;
+      const ssl = field('use_ssl');
+      if (ssl) ssl.checked = preset.ssl;
+      const name = field('name');
+      if (name) {
+        const current = name.value.trim();
+        const presetNames = Object.values(presets).map((item) => item.name);
+        if (!current || presetNames.includes(current)) name.value = preset.name;
+      }
+    });
+  }
   all('dialog').forEach((dialog) => {
     dialog.addEventListener('click', (event) => {
       const bounds = dialog.getBoundingClientRect();
