@@ -17,7 +17,7 @@ from sqlalchemy import and_, or_, select
 
 from app.config import get_settings
 from app.db import SessionLocal
-from app.models import Invoice, JobLog
+from app.models import Invoice, JobLog, User
 from app.services.extractor import (
     FIELDS,
     extract_document,
@@ -25,6 +25,7 @@ from app.services.extractor import (
     parse_invoice_fields,
 )
 from app.services.settings_service import as_bool, get_integrations
+from app.services.title_service import title_warning
 
 logger = logging.getLogger(__name__)
 _kingdee_token: dict[str, Any] = {"value": "", "expires": 0.0, "fingerprint": ""}
@@ -431,6 +432,7 @@ def process_invoice(invoice_id: str) -> None:
             return
         invoice.status = "processing"
         invoice.error_message = ""
+        invoice.title_warning = ""
         db.commit()
         path = settings.upload_dir / invoice.stored_name
         config = get_integrations(db, user_id=invoice.owner_id)
@@ -494,6 +496,8 @@ def process_invoice(invoice_id: str) -> None:
                 if provider_error:
                     invoice.error_message = f"金蝶查验未完成：{provider_error}；已回退到 {invoice.verification_method.upper()}"
 
+            owner = db.get(User, invoice.owner_id) if invoice.owner_id else None
+            invoice.title_warning = title_warning(db, owner, invoice.buyer_name, invoice.buyer_tax_id)
             duplicate = _find_business_duplicate(invoice, db)
             if duplicate:
                 invoice.duplicate_of = duplicate.id

@@ -42,4 +42,8 @@ def init_db() -> None:
     from app import models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
-
+    # 轻量迁移：为已有 invoices 表补充 title_warning 列（新库由 create_all 直接创建）
+    with engine.begin() as conn:
+        columns = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(invoices)")}
+        if "title_warning" not in columns:
+            conn.exec_driver_sql("ALTER TABLE invoices ADD COLUMN title_warning TEXT NOT NULL DEFAULT ''")

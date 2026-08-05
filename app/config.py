@@ -66,6 +66,11 @@ class Settings(BaseSettings):
     piaozone_token_path: str = "/base/oauth/token"
     piaozone_invoice_check_path: str = "/m3/bill/invoice/img/Check/info"
 
+    # 收票抬头预设（JSON 数组）。每项支持 name/tax_id/address/phone/
+    # bank_name/bank_account/bank_code。留空表示不限制抬头；
+    # 配置后仅接受预设抬头、用户自行新增抬头或包含本人姓名的抬头。
+    invoice_titles_json: str = ""
+
     @field_validator("app_base_url", "oidc_issuer")
     @classmethod
     def trim_urls(cls, value: str) -> str:

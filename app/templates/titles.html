@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}收票抬头 · {{ app_name }}{% endblock %}
+{% block content %}
+<header class="page-head"><div><span class="eyebrow">INVOICE TITLES / 收票抬头</span><h1>限定可收取的发票抬头</h1><p>未配置任何抬头时默认收取全部发票；有预设后，仅接受预设抬头、你自行新增的抬头，或包含你姓名的抬头，其他抬头会标记警示。</p></div><button class="button primary" type="button" data-dialog-open="title-dialog">＋ 新增抬头</button></header>
+{% if presets %}
+<section class="panel">
+  <div class="section-title"><div><span class="eyebrow">ADMIN PRESETS</span><h2>管理员预设抬头</h2><p>来自服务器环境变量，只读，对所有用户生效。</p></div></div>
+  <div class="title-grid">
+    {% for preset in presets %}
+    <article class="title-card">
+      <div class="title-card-head"><strong>{{ preset.name or '未命名抬头' }}</strong>{% if preset.tax_id %}<span class="mono">{{ preset.tax_id }}</span>{% endif %}</div>
+      <dl>
+        {% if preset.address %}<div><dt>地址</dt><dd>{{ preset.address }}</dd></div>{% endif %}
+        {% if preset.phone %}<div><dt>电话</dt><dd>{{ preset.phone }}</dd></div>{% endif %}
+        {% if preset.bank_name %}<div><dt>开户行</dt><dd>{{ preset.bank_name }}</dd></div>{% endif %}
+        {% if preset.bank_account %}<div><dt>账号</dt><dd class="mono">{{ preset.bank_account }}</dd></div>{% endif %}
+        {% if preset.bank_code %}<div><dt>行号</dt><dd class="mono">{{ preset.bank_code }}</dd></div>{% endif %}
+      </dl>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+{% else %}
+<div class="notice subtle"><b>未配置预设</b><p>管理员尚未在环境变量中设置抬头，当前默认收取所有发票。</p></div>
+{% endif %}
+<section class="table-panel">
+  <table class="data-table">
+    <thead><tr><th>单位名称</th><th>税号</th><th>开户行</th><th>账号</th><th></th></tr></thead>
+    <tbody>
+    {% for item in items %}
+      <tr>
+        <td><strong>{{ item.name }}</strong>{% if item.address %}<small>{{ item.address }}</small>{% endif %}</td>
+        <td class="mono">{{ item.tax_id or '—' }}</td>
+        <td>{{ item.bank_name or '—' }}{% if item.bank_code %}<small class="mono">行号 {{ item.bank_code }}</small>{% endif %}</td>
+        <td class="mono">{{ item.bank_account or '—' }}</td>
+        <td class="row-actions"><form action="/titles/{{ item.id }}/delete" method="post" data-confirm="删除该抬头？删除后不再视为允许收票。"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="text-button danger-text">删除</button></form></td>
+      </tr>
+    {% else %}<tr><td colspan="5"><div class="empty small"><b>抬</b><h3>还没有个人抬头</h3><p>可在这里新增你自己的抬头，例如需要单独报销的部门抬头或代收抬头。</p></div></td></tr>{% endfor %}
+    </tbody>
+  </table>
+</section>
+<dialog id="title-dialog" class="dialog">
+  <form action="/titles" method="post" class="dialog-card">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <div class="dialog-head"><div><span class="eyebrow">NEW TITLE</span><h2>新增收票抬头</h2></div><button type="button" class="icon-button" data-dialog-close aria-label="关闭">×</button></div>
+    <div class="form-grid two">
+      <label class="span-2">单位名称<input name="name" required placeholder="发票购买方抬头名称"></label>
+      <label class="span-2">税号<input name="tax_id" class="mono" placeholder="纳税人识别号"></label>
+      <label class="span-2">地址<input name="address" placeholder="注册地址"></label>
+      <label>电话<input name="phone" placeholder="联系电话"></label>
+      <label>开户行名称<input name="bank_name" placeholder="开户银行"></label>
+      <label>开户行账号<input name="bank_account" class="mono" placeholder="银行账号"></label>
+      <label>开户行行号<input name="bank_code" class="mono" placeholder="联行号"></label>
+    </div>
+    <button class="button primary wide" type="submit">保存抬头</button>
+  </form>
+</dialog>
+{% endblock %}

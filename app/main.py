@@ -29,7 +29,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from app import __version__
 from app.config import get_settings
 from app.db import SessionLocal, get_db, init_db
-from app.models import AuditLog, Invoice, JobLog, Mailbox, User, utcnow
+from app.models import AuditLog, Invoice, JobLog, Mailbox, User, UserTitle, utcnow
 from app.security import (
     bootstrap_admin,
     csrf_token,
@@ -52,6 +52,7 @@ from app.services.settings_service import (
     update_integrations,
     user_custom_integrations,
 )
+from app.services.title_service import env_presets, title_warning, user_titles
 from app.services.verifier import process_invoice, test_kingdee, test_llm, test_piaozone
 
 settings = get_settings()
@@ -561,6 +562,7 @@ async def save_invoice(invoice_id: str, request: Request, db: Session = Depends(
         setattr(invoice, field, round(float(raw), 2) if raw else None)
     invoice.status = "reviewed"
     invoice.verified_at = utcnow()
+    invoice.title_warning = title_warning(db, user, invoice.buyer_name, invoice.buyer_tax_id)
     db.commit()
     record_audit(db, request, user, "invoice.review", "invoice", invoice.id)
     flash(request, "人工复核结果已保存")
@@ -770,6 +772,57 @@ async def integration_test(provider: str, request: Request, db: Session = Depend
     except Exception as exc:
         flash(request, f"测试失败：{exc}", "error")
     return RedirectResponse("/integrations", status_code=303)
+
+
+@app.get("/titles", response_class=HTMLResponse)
+def titles_page(request: Request, db: Session = Depends(get_db)):
+    user = require_page_user(request, db)
+    return templates.TemplateResponse(
+        request,
+        "titles.html",
+        context(request, user, page="titles", presets=env_presets(), items=user_titles(db, user.id)),
+    )
+
+
+@app.post("/titles")
+async def titles_add(request: Request, db: Session = Depends(get_db)):
+    user = require_page_user(request, db)
+    form = await request.form()
+    validate_csrf(request, str(form.get("csrf_token", "")))
+    name = str(form.get("name", "")).strip()
+    if not name:
+        flash(request, "单位名称不能为空", "error")
+        return RedirectResponse("/titles", status_code=303)
+    title = UserTitle(
+        user_id=user.id,
+        name=name,
+        tax_id=str(form.get("tax_id", "")).strip(),
+        address=str(form.get("address", "")).strip(),
+        phone=str(form.get("phone", "")).strip(),
+        bank_name=str(form.get("bank_name", "")).strip(),
+        bank_account=str(form.get("bank_account", "")).strip(),
+        bank_code=str(form.get("bank_code", "")).strip(),
+    )
+    db.add(title)
+    db.commit()
+    record_audit(db, request, user, "title.add", "user_title", str(title.id), {"name": name})
+    flash(request, "收票抬头已新增")
+    return RedirectResponse("/titles", status_code=303)
+
+
+@app.post("/titles/{title_id}/delete")
+async def titles_delete(title_id: str, request: Request, db: Session = Depends(get_db)):
+    user = require_page_user(request, db)
+    form = await request.form()
+    validate_csrf(request, str(form.get("csrf_token", "")))
+    title = db.get(UserTitle, title_id)
+    if not title or title.user_id != user.id:
+        raise HTTPException(status_code=404, detail="抬头不存在")
+    record_audit(db, request, user, "title.delete", "user_title", title_id, {"name": title.name})
+    db.delete(title)
+    db.commit()
+    flash(request, "收票抬头已删除")
+    return RedirectResponse("/titles", status_code=303)
 
 
 @app.get("/print", response_class=HTMLResponse)

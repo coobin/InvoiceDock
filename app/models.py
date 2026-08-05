@@ -73,6 +73,7 @@ class Invoice(Base):
     currency: Mapped[str] = mapped_column(String(10), default="CNY")
     category: Mapped[str] = mapped_column(String(80), default="未分类", index=True)
     notes: Mapped[str] = mapped_column(Text, default="")
+    title_warning: Mapped[str] = mapped_column(Text, default="")
 
     raw_text: Mapped[str] = mapped_column(Text, default="")
     ocr_data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
@@ -143,6 +144,23 @@ class UserIntegration(Base):
     value: Mapped[str] = mapped_column(Text, default="")
     encrypted: Mapped[bool] = mapped_column(Boolean, default=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class UserTitle(Base):
+    """用户自行新增的收票抬头（叠加在管理员 env 预设之上）。"""
+
+    __tablename__ = "user_titles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    tax_id: Mapped[str] = mapped_column(String(40), default="")
+    address: Mapped[str] = mapped_column(String(500), default="")
+    phone: Mapped[str] = mapped_column(String(40), default="")
+    bank_name: Mapped[str] = mapped_column(String(255), default="")
+    bank_account: Mapped[str] = mapped_column(String(100), default="")
+    bank_code: Mapped[str] = mapped_column(String(40), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class AuditLog(Base):

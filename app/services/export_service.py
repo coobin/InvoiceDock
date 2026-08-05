@@ -83,7 +83,7 @@ def make_invoice_workbook(invoices: list[Invoice]) -> bytes:
     sheet.title = "发票台账"
     headers = [
         "状态", "查验方式", "发票类型", "发票代码", "发票号码", "开票日期", "销售方", "销售方税号",
-        "购买方", "购买方税号", "不含税金额", "税额", "价税合计", "分类", "来源", "原文件名", "入库时间",
+        "购买方", "购买方税号", "不含税金额", "税额", "价税合计", "分类", "来源", "抬头警示", "原文件名", "入库时间",
     ]
     sheet.append(headers)
     for cell in sheet[1]:
@@ -107,10 +107,11 @@ def make_invoice_workbook(invoices: list[Invoice]) -> bytes:
             item.total_amount,
             item.category,
             item.source,
+            item.title_warning,
             item.original_name,
             item.created_at.isoformat(sep=" ", timespec="seconds"),
         ])
-    widths = [12, 12, 20, 16, 22, 14, 32, 22, 32, 22, 15, 15, 15, 14, 14, 36, 21]
+    widths = [12, 12, 20, 16, 22, 14, 32, 22, 32, 22, 15, 15, 15, 14, 14, 24, 36, 21]
     for index, width in enumerate(widths, start=1):
         sheet.column_dimensions[chr(64 + index) if index <= 26 else f"A{chr(64 + index - 26)}"].width = width
     sheet.freeze_panes = "A2"
@@ -139,4 +140,3 @@ def make_preview(invoice: Invoice) -> Path | None:
         return target
     except Exception:
         return None
-

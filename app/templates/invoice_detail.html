@@ -14,6 +14,7 @@
 </header>
 
 {% if invoice.error_message %}<div class="notice {{ 'error' if invoice.status == 'failed' else 'warning' }}"><b>{{ '处理失败' if invoice.status == 'failed' else '处理说明' }}</b><p>{{ invoice.error_message }}</p></div>{% endif %}
+{% if invoice.title_warning %}<div class="notice warning"><b>收票抬头警示</b><p>{{ invoice.title_warning }}</p></div>{% endif %}
 {% if duplicate %}<div class="notice warning"><b>疑似重复发票</b><p>系统发现业务字段与 <a href="/invoices/{{ duplicate.id }}">{{ duplicate.invoice_number or duplicate.original_name }}</a> 相同，请人工确认是否重复报销。</p></div>{% endif %}
 
 <div class="detail-grid">
@@ -71,4 +72,3 @@
 </section>
 <section class="danger-zone"><div><h3>删除这条记录</h3><p>同时删除服务器上的原始文件和缩略图；审计日志会保留。</p></div><form action="/invoices/{{ invoice.id }}/delete" method="post" data-confirm="确定删除这张发票及其原始文件吗？此操作无法撤销。"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="button danger">删除发票</button></form></section>
 {% endblock %}
-
