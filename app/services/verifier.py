@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import json
 import logging
 import re
@@ -26,6 +28,7 @@ from app.services.settings_service import as_bool, get_integrations
 
 logger = logging.getLogger(__name__)
 _kingdee_token: dict[str, Any] = {"value": "", "expires": 0.0, "fingerprint": ""}
+_piaozone_token: dict[str, Any] = {"value": "", "expires": 0.0, "fingerprint": ""}
 
 
 class IntegrationError(RuntimeError):
@@ -195,6 +198,127 @@ def verify_with_kingdee(path: Path, config: dict[str, str]) -> tuple[dict[str, A
     return map_external_fields(invoice_data), raw
 
 
+def _piaozone_complete(config: dict[str, str]) -> bool:
+    required = ["piaozone_base_url", "piaozone_client_id", "piaozone_client_secret"]
+    return as_bool(config.get("piaozone_enabled")) and all(config.get(key) for key in required)
+
+
+def _piaozone_sign(client_id: str, client_secret: str, timestamp: str, method: str) -> tuple[str, int]:
+    text = f"{client_id}{client_secret}{timestamp}"
+    method = (method or "MD5").upper()
+    if method == "SHA256":
+        return hashlib.sha256(text.encode("utf-8")).hexdigest(), 1
+    if method == "HMACSHA256":
+        return hmac.new(client_secret.encode("utf-8"), text.encode("utf-8"), hashlib.sha256).hexdigest(), 2
+    return hashlib.md5(text.encode("utf-8")).hexdigest(), 0
+
+
+def get_piaozone_access_token(config: dict[str, str], force: bool = False) -> str:
+    base_url = config["piaozone_base_url"].rstrip("/")
+    token_path = config.get("piaozone_token_path") or "/base/oauth/token"
+    fingerprint = "|".join([base_url, token_path, config.get("piaozone_client_id", "")])
+    if not force and _piaozone_token["value"] and _piaozone_token["expires"] > time.time() + 60 and _piaozone_token["fingerprint"] == fingerprint:
+        return str(_piaozone_token["value"])
+    timestamp = str(int(time.time() * 1000))
+    sign, enc_type = _piaozone_sign(
+        config["piaozone_client_id"],
+        config["piaozone_client_secret"],
+        timestamp,
+        config.get("piaozone_sign_method", "MD5"),
+    )
+    with httpx.Client(timeout=30.0, verify=True) as client:
+        response = client.post(
+            f"{base_url}{token_path}",
+            json={
+                "client_id": config["piaozone_client_id"],
+                "timestamp": timestamp,
+                "sign": sign,
+                "encType": enc_type,
+            },
+        )
+        response.raise_for_status()
+        raw = response.json()
+        token = ""
+        for key in ("access_token", "accessToken", "token"):
+            if raw.get(key):
+                token = str(raw[key])
+                break
+        if not token and isinstance(raw.get("data"), dict):
+            for key in ("access_token", "accessToken", "token"):
+                if raw["data"].get(key):
+                    token = str(raw["data"][key])
+                    break
+        if not token:
+            raise IntegrationError(str(raw.get("message") or raw.get("error") or "金蝶标准版 access_token 获取失败"))
+    _piaozone_token.update(value=token, expires=time.time() + 7000, fingerprint=fingerprint)
+    return token
+
+
+def _piaozone_nested(raw: Any) -> dict[str, Any]:
+    candidates: list[dict[str, Any]] = []
+
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            if any(key in value for key in ("invoiceNo", "InvoiceNo", "buyerName", "BuyerName", "totalAmount", "TotalAmount", "salerName")):
+                candidates.append(value)
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(raw)
+    return candidates[0] if candidates else (raw if isinstance(raw, dict) else {})
+
+
+def _piaozone_date(value: Any) -> str:
+    text = str(value or "").strip()
+    match = re.search(r"(\d{4})[-年./](\d{1,2})[-月./](\d{1,2})", text)
+    if match:
+        year, month, day = (int(part) for part in match.groups())
+        return f"{year:04d}-{month:02d}-{day:02d}"
+    return text[:20]
+
+
+def verify_with_piaozone(path: Path, config: dict[str, str]) -> tuple[dict[str, Any], dict[str, Any]]:
+    token = get_piaozone_access_token(config)
+    base_url = config["piaozone_base_url"].rstrip("/")
+    check_path = config.get("piaozone_invoice_check_path") or "/m3/bill/invoice/img/Check/info"
+    extension = path.suffix.lower().lstrip(".")
+    file_type = "jpg" if extension in {"jpg", "jpeg"} else (extension or "pdf")
+    body = base64.b64encode(path.read_bytes()).decode("ascii")
+    with httpx.Client(timeout=90.0, verify=True) as client:
+        response = client.post(
+            f"{base_url}{check_path}",
+            params={"access_token": token, "type": file_type},
+            content=body,
+            headers={"Content-Type": "application/json"},
+        )
+        response.raise_for_status()
+        raw = response.json()
+    payload = _piaozone_nested(raw)
+    if not payload:
+        raise IntegrationError("金蝶标准版返回成功但未包含可识别的发票字段")
+    fields = {
+        "invoice_type": str(_pick(payload, "invoiceTypeName", "invoiceType", "type")),
+        "invoice_code": str(_pick(payload, "invoiceCode", "code", "fpdm")),
+        "invoice_number": str(_pick(payload, "invoiceNo", "InvoiceNo", "invoiceNumber", "digitalInvoiceNo", "eInvoiceNo", "number", "fphm")),
+        "invoice_date": _piaozone_date(_pick(payload, "invoiceDate", "issueDate", "billingDate", "date", "kprq")),
+        "check_code": str(_pick(payload, "checkCode", "jym")),
+        "seller_name": str(_pick(payload, "salerName", "sellerName", "salesName", "xfmc"))[:255],
+        "seller_tax_id": str(_pick(payload, "salerTaxNo", "sellerTaxNo", "sellerNsrsbh", "xfsh")),
+        "buyer_name": str(_pick(payload, "buyerName", "purchaserName", "buyer", "gfmc"))[:255],
+        "buyer_tax_id": str(_pick(payload, "buyerTaxNo", "buyerNsrsbh", "gfsh")),
+        "amount": _float(_pick(payload, "amountWithoutTax", "amount", "hjje")),
+        "tax_amount": _float(_pick(payload, "taxAmount", "hjse")),
+        "total_amount": _float(_pick(payload, "totalAmount", "amountWithTax", "totalTaxAmount", "invoiceAmount", "jshj")),
+        "category": "未分类",
+    }
+    if not fields["invoice_number"] and fields["total_amount"] is None:
+        raise IntegrationError("金蝶标准版未识别到核心发票字段")
+    return fields, raw
+
+
 LLM_PROMPT = """你是中国发票结构化提取器。只依据提供的原文和图片，不猜测看不清的值。
 返回一个 JSON 对象，不要 Markdown，不要解释。字段必须完整：
 invoice_type, invoice_code, invoice_number, invoice_date(YYYY-MM-DD), check_code,
@@ -310,9 +434,22 @@ def process_invoice(invoice_id: str) -> None:
         db.commit()
         path = settings.upload_dir / invoice.stored_name
         config = get_integrations(db, user_id=invoice.owner_id)
-        kingdee_error = ""
+        provider_error = ""
         try:
-            if _kingdee_complete(config):
+            if _piaozone_complete(config):
+                try:
+                    fields, raw = verify_with_piaozone(path, config)
+                    _apply_fields(invoice, fields)
+                    invoice.kingdee_data = raw
+                    invoice.verification_method = "piaozone"
+                    invoice.status = "verified"
+                    invoice.confidence = 1.0
+                    invoice.verified_at = datetime.now(UTC).replace(tzinfo=None)
+                except Exception as exc:
+                    provider_error = str(exc)
+                    db.add(JobLog(level="warning", event="piaozone.fallback", message=provider_error, details={"invoice_id": invoice.id}))
+
+            if invoice.status != "verified" and _kingdee_complete(config):
                 try:
                     fields, raw = verify_with_kingdee(path, config)
                     _apply_fields(invoice, fields)
@@ -322,8 +459,8 @@ def process_invoice(invoice_id: str) -> None:
                     invoice.confidence = 1.0
                     invoice.verified_at = datetime.now(UTC).replace(tzinfo=None)
                 except Exception as exc:
-                    kingdee_error = str(exc)
-                    db.add(JobLog(level="warning", event="kingdee.fallback", message=kingdee_error, details={"invoice_id": invoice.id}))
+                    provider_error = str(exc)
+                    db.add(JobLog(level="warning", event="kingdee.fallback", message=provider_error, details={"invoice_id": invoice.id}))
 
             if invoice.status != "verified":
                 text, structured, preview = extract_document(path, invoice.mime_type)
@@ -354,8 +491,8 @@ def process_invoice(invoice_id: str) -> None:
                     invoice.verification_method = "ocr"
                     invoice.status = "review"
                     invoice.error_message = "未配置 LLM，已完成本地 OCR/文本提取，需人工复核"
-                if kingdee_error:
-                    invoice.error_message = f"金蝶查验未完成：{kingdee_error}；已回退到 {invoice.verification_method.upper()}"
+                if provider_error:
+                    invoice.error_message = f"金蝶查验未完成：{provider_error}；已回退到 {invoice.verification_method.upper()}"
 
             duplicate = _find_business_duplicate(invoice, db)
             if duplicate:
@@ -381,6 +518,13 @@ def test_kingdee(config: dict[str, str]) -> str:
     if not _kingdee_complete(config):
         raise IntegrationError("请先启用并填写完整的金蝶连接信息")
     token = get_kingdee_access_token(config, force=True)
+    return f"连接成功，access_token 已获取（…{token[-8:]}）"
+
+
+def test_piaozone(config: dict[str, str]) -> str:
+    if not _piaozone_complete(config):
+        raise IntegrationError("请先启用并填写完整的金蝶标准版（Piaozone）连接信息")
+    token = get_piaozone_access_token(config, force=True)
     return f"连接成功，access_token 已获取（…{token[-8:]}）"
 
 

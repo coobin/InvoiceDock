@@ -13,6 +13,7 @@
 - 多 IMAP 邮箱定时收取，支持 PDF/OFD/XML/图片附件、受限 ZIP 展开，以及公网直接下载型发票链接。
 - 手动批量上传，限制格式、文件体积、压缩包展开大小，以 SHA-256 去除完全相同文件。
 - 金蝶发票云旗舰版优先：自动获取 `app_token` / `access_token`，调用 `recognitionCheck`。
+- 金蝶发票云标准版（Piaozone）：`client_id`/`client_secret` 签名授权，调用 `img/Check/info` 识别查验；配置完整时优先于旗舰版。
 - 本地 PDF 文本层、XML/OFD 结构和 Tesseract OCR 提取；可连接任意 OpenAI Chat Completions 兼容 LLM。
 - OCR 与 LLM 逐字段对比；关键字段冲突进入人工复核，不把“双源一致”标成“官方验真”。
 - 票号/代码/日期/金额业务去重提醒，原文件、处理结果、冲突和人工修改均留痕。

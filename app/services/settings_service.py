@@ -11,6 +11,8 @@ SECRET_KEYS = {
     "kingdee_app_secret",
     "kingdee_access_token",
     "llm_api_key",
+    "piaozone_client_secret",
+    "piaozone_encrypt_key",
 }
 
 
@@ -30,11 +32,25 @@ INTEGRATION_DEFAULTS = {
     "llm_api_key": "",
     "llm_model": "gpt-4.1-mini",
     "llm_vision": "true",
+    "piaozone_enabled": "false",
+    "piaozone_base_url": "https://api.piaozone.com",
+    "piaozone_client_id": "",
+    "piaozone_client_secret": "",
+    "piaozone_encrypt_key": "",
+    "piaozone_sign_method": "MD5",
+    "piaozone_token_path": "/base/oauth/token",
+    "piaozone_invoice_check_path": "/m3/bill/invoice/img/Check/info",
 }
 
 KINGDEE_KEYS = frozenset(key for key in INTEGRATION_DEFAULTS if key.startswith("kingdee_"))
+PIAOZONE_KEYS = frozenset(key for key in INTEGRATION_DEFAULTS if key.startswith("piaozone_"))
 LLM_KEYS = frozenset(key for key in INTEGRATION_DEFAULTS if key.startswith("llm_"))
-INTEGRATIONS = ("kingdee", "llm")
+INTEGRATION_KEYS = {
+    "kingdee": KINGDEE_KEYS,
+    "piaozone": PIAOZONE_KEYS,
+    "llm": LLM_KEYS,
+}
+INTEGRATIONS = tuple(INTEGRATION_KEYS)
 
 
 def env_values() -> dict[str, str]:
@@ -103,8 +119,7 @@ def get_integrations(
         for integration in INTEGRATIONS:
             if f"{integration}_enabled" not in user_vals:
                 continue
-            keys = KINGDEE_KEYS if integration == "kingdee" else LLM_KEYS
-            for key in keys:
+            for key in INTEGRATION_KEYS[integration]:
                 if key in user_vals:
                     values[key] = user_vals[key]
     if mask_secrets:
@@ -154,7 +169,7 @@ def update_integrations(
 
 
 def clear_user_integration(db: Session, user_id: str, integration: str) -> None:
-    keys = KINGDEE_KEYS if integration == "kingdee" else LLM_KEYS
+    keys = INTEGRATION_KEYS[integration]
     rows = db.scalars(
         select(UserIntegration).where(
             UserIntegration.user_id == user_id, UserIntegration.key.in_(keys)

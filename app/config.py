@@ -55,6 +55,17 @@ class Settings(BaseSettings):
     llm_model: str = ""
     llm_vision: str = ""
 
+    # 金蝶发票云 · 标准版（Piaozone）override。使用 client_id/client_secret
+    # 签名授权（/base/oauth/token），识别查验走 /m3/bill/invoice/img/Check/info。
+    piaozone_enabled: str = ""
+    piaozone_base_url: str = "https://api.piaozone.com"
+    piaozone_client_id: str = ""
+    piaozone_client_secret: str = ""
+    piaozone_encrypt_key: str = ""
+    piaozone_sign_method: str = "MD5"
+    piaozone_token_path: str = "/base/oauth/token"
+    piaozone_invoice_check_path: str = "/m3/bill/invoice/img/Check/info"
+
     @field_validator("app_base_url", "oidc_issuer")
     @classmethod
     def trim_urls(cls, value: str) -> str:

@@ -9,6 +9,7 @@
 <div class="notice subtle"><b>环境变量优先</b><p>以下配置项由服务器环境变量提供，表单与数据库中的值不会生效：{{ env_keys | join('、') }}。</p></div>
 {% endif %}
 {% set kd_custom = not is_admin and 'kingdee' in custom %}
+{% set pz_custom = not is_admin and 'piaozone' in custom %}
 {% set llm_custom = not is_admin and 'llm' in custom %}
 <form action="/integrations" method="post" class="integration-stack">
   <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
@@ -30,8 +31,24 @@
     </div>
     {% if not is_admin %}<div class="privacy-band"><b>{{ '使用我的配置' if kd_custom else '使用管理员配置' }}</b><p>{{ '凭据已加密保存，仅你自己可见。' if kd_custom else '未自定义时，你的发票使用管理员配置的金蝶凭据。' }}</p></div>{% endif %}
   </section>
+  <section class="integration-card piaozone-card">
+    <div class="integration-head"><div class="integration-number">02</div><div><span class="eyebrow">KINGDEE STANDARD</span><h2>金蝶发票云 · 标准版（Piaozone）</h2><p>client_id / client_secret 签名授权，调用 <span class="mono">img/Check/info</span> 识别查验；配置完整时优先于旗舰版。</p></div>
+      {% if not is_admin %}<label class="switch"><input type="checkbox" name="piaozone_custom" value="1" {{ 'checked' if pz_custom else '' }}><span></span><b>自定义配置</b></label>{% else %}<label class="switch"><input type="checkbox" name="piaozone_enabled" {{ 'checked' if values.piaozone_enabled == 'true' else '' }}><span></span><b>启用</b></label>{% endif %}
+    </div>
+    <div class="form-grid three">
+      {% if not is_admin %}<label class="toggle-row compact span-2"><input type="checkbox" name="piaozone_enabled" {{ 'checked' if field_values.piaozone_enabled == 'true' else '' }} {{ 'disabled' if not pz_custom else '' }}><span></span><div><strong>启用金蝶标准版查验</strong><small>关闭后该集成对你个人不生效</small></div></label>{% endif %}
+      <label class="span-2">环境地址<input type="url" name="piaozone_base_url" value="{{ field_values.piaozone_base_url }}" placeholder="https://api.piaozone.com" {{ 'disabled' if not is_admin and not pz_custom else '' }}></label>
+      <label>Client ID<input name="piaozone_client_id" value="{{ field_values.piaozone_client_id }}" {{ 'disabled' if not is_admin and not pz_custom else '' }}></label>
+      <label>Client Secret<input type="password" name="piaozone_client_secret" value="{{ field_values.piaozone_client_secret }}" autocomplete="new-password" placeholder="{{ '由环境变量提供' if 'piaozone_client_secret' in env_keys else '' }}" {{ 'disabled' if not is_admin and not pz_custom else '' }}></label>
+      <label>加密密钥<input type="password" name="piaozone_encrypt_key" value="{{ field_values.piaozone_encrypt_key }}" autocomplete="new-password" placeholder="{{ '由环境变量提供' if 'piaozone_encrypt_key' in env_keys else '' }}" {{ 'disabled' if not is_admin and not pz_custom else '' }}></label>
+      <label>签名方式<select name="piaozone_sign_method" {{ 'disabled' if not is_admin and not pz_custom else '' }}><option value="MD5" {{ 'selected' if field_values.piaozone_sign_method == 'MD5' else '' }}>MD5</option><option value="SHA256" {{ 'selected' if field_values.piaozone_sign_method == 'SHA256' else '' }}>SHA256</option><option value="HMACSHA256" {{ 'selected' if field_values.piaozone_sign_method == 'HMACSHA256' else '' }}>HMACSHA256</option></select></label>
+      <label>Token 路径<input name="piaozone_token_path" value="{{ field_values.piaozone_token_path }}" {{ 'disabled' if not is_admin and not pz_custom else '' }}></label>
+      <label class="span-2">识别查验路径<input name="piaozone_invoice_check_path" value="{{ field_values.piaozone_invoice_check_path }}" {{ 'disabled' if not is_admin and not pz_custom else '' }}></label>
+    </div>
+    {% if not is_admin %}<div class="privacy-band"><b>{{ '使用我的配置' if pz_custom else '使用管理员配置' }}</b><p>{{ '凭据已加密保存，仅你自己可见。' if pz_custom else '未自定义时，你的发票使用管理员配置的金蝶标准版凭据。' }}</p></div>{% endif %}
+  </section>
   <section class="integration-card llm-card">
-    <div class="integration-head"><div class="integration-number">02</div><div><span class="eyebrow">FALLBACK</span><h2>OCR + LLM 双源一致性</h2><p>本地 Tesseract/文本层与 OpenAI 兼容接口独立提取；只对共同字段做比对。</p></div>
+    <div class="integration-head"><div class="integration-number">03</div><div><span class="eyebrow">FALLBACK</span><h2>OCR + LLM 双源一致性</h2><p>本地 Tesseract/文本层与 OpenAI 兼容接口独立提取；只对共同字段做比对。</p></div>
       {% if not is_admin %}<label class="switch"><input type="checkbox" name="llm_custom" value="1" {{ 'checked' if llm_custom else '' }}><span></span><b>自定义配置</b></label>{% else %}<label class="switch"><input type="checkbox" name="llm_enabled" {{ 'checked' if values.llm_enabled == 'true' else '' }}><span></span><b>启用</b></label>{% endif %}
     </div>
     <div class="form-grid three">
@@ -46,7 +63,7 @@
   </section>
   <button class="button primary save-integrations" type="submit">{{ '保存并加密配置' if is_admin else '保存我的配置' }}</button>
 </form>
-<div class="integration-tests"><form action="/integrations/test/kingdee" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="button secondary">测试当前生效的金蝶连接</button></form><form action="/integrations/test/llm" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="button secondary">测试当前生效的 LLM 连接</button></form></div>
+<div class="integration-tests"><form action="/integrations/test/kingdee" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="button secondary">测试金蝶旗舰版连接</button></form><form action="/integrations/test/piaozone" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="button secondary">测试金蝶标准版连接</button></form><form action="/integrations/test/llm" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="button secondary">测试当前生效的 LLM 连接</button></form></div>
 {% if is_admin %}
 <section class="oidc-summary panel"><div><span class="integration-number">ID</span><div><span class="eyebrow">IDENTITY</span><h2>OIDC 登录</h2><p>OIDC 使用环境变量配置，避免客户端密钥进入数据库导出。</p></div><span class="status {{ 'verified' if oidc.enabled else 'muted' }}">{{ '已启用' if oidc.enabled else '未启用' }}</span></div><dl><div><dt>Issuer</dt><dd class="mono">{{ oidc.issuer or '—' }}</dd></div><div><dt>Client ID</dt><dd class="mono">{{ oidc.client_id or '—' }}</dd></div><div><dt>Callback URL</dt><dd class="mono">{{ oidc.callback }}</dd></div></dl></section>
 {% endif %}

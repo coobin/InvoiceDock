@@ -45,15 +45,14 @@ from app.services.export_service import make_invoice_workbook, make_preview, mak
 from app.services.ingestion import extract_zip_candidates, ingest_bytes
 from app.services.mail_service import scan_all_mailboxes, sync_mailbox, test_mailbox
 from app.services.settings_service import (
-    KINGDEE_KEYS,
-    LLM_KEYS,
+    INTEGRATION_KEYS,
     clear_user_integration,
     get_env_keys,
     get_integrations,
     update_integrations,
     user_custom_integrations,
 )
-from app.services.verifier import process_invoice, test_kingdee, test_llm
+from app.services.verifier import process_invoice, test_kingdee, test_llm, test_piaozone
 
 settings = get_settings()
 logging.basicConfig(
@@ -708,8 +707,9 @@ def integrations_page(request: Request, db: Session = Depends(get_db)):
         field_values = values
     else:
         field_values = {}
-        for key, integration in ((key, "kingdee" if key.startswith("kingdee_") else "llm") for key in values):
-            field_values[key] = own_values.get(key, "") if integration in custom else ""
+        for integration, keys in INTEGRATION_KEYS.items():
+            for key in keys:
+                field_values[key] = own_values.get(key, "") if integration in custom else ""
     return templates.TemplateResponse(
         request,
         "integrations.html",
@@ -735,7 +735,7 @@ async def integrations_save(request: Request, db: Session = Depends(get_db)):
         record_audit(db, request, user, "integrations.update", details={"keys": sorted(values)})
         flash(request, "全局集成配置已加密保存")
     else:
-        for integration, keys in (("kingdee", KINGDEE_KEYS), ("llm", LLM_KEYS)):
+        for integration, keys in INTEGRATION_KEYS.items():
             if str(form.get(f"{integration}_custom", "")) != "1":
                 clear_user_integration(db, user.id, integration)
                 continue
@@ -757,7 +757,12 @@ async def integration_test(provider: str, request: Request, db: Session = Depend
     validate_csrf(request, str(form.get("csrf_token", "")))
     config = get_integrations(db, user_id=None if user.role == "admin" else user.id)
     try:
-        result = test_kingdee(config) if provider == "kingdee" else test_llm(config) if provider == "llm" else None
+        result = (
+            test_kingdee(config) if provider == "kingdee"
+            else test_piaozone(config) if provider == "piaozone"
+            else test_llm(config) if provider == "llm"
+            else None
+        )
         if result is None:
             raise ValueError("未知集成")
         flash(request, result)
