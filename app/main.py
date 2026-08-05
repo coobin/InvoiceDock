@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote
 
+import httpx
 from apscheduler.schedulers.background import BackgroundScheduler
 from authlib.integrations.starlette_client import OAuth, OAuthError
 from fastapi import (
@@ -101,6 +102,27 @@ async def _oidc_clear_state_data(session, state) -> None:  # type: ignore[no-unt
         if row:
             db.delete(row)
             db.commit()
+
+
+async def _oidc_userinfo(token: dict) -> dict:
+    """Fetch claims from the provider's userinfo endpoint. authlib 1.7.2 only
+    exposes parsed id_token claims (which Authelia keeps minimal), so we call
+    the userinfo endpoint directly to get name/email/preferred_username."""
+    access_token = str(token.get("access_token") or "")
+    if not access_token:
+        return {}
+    try:
+        issuer = settings.oidc_issuer.rstrip("/")
+        async with httpx.AsyncClient(timeout=15.0, verify=True) as client:
+            metadata = (await client.get(f"{issuer}/.well-known/openid-configuration")).json()
+            endpoint = str(metadata.get("userinfo_endpoint") or f"{issuer}/api/oidc/userinfo")
+            response = await client.get(
+                endpoint, headers={"Authorization": f"Bearer {access_token}"}
+            )
+            response.raise_for_status()
+            return response.json()
+    except Exception:
+        return {}
 
 
 @asynccontextmanager
@@ -355,7 +377,10 @@ async def oidc_callback(request: Request, db: Session = Depends(get_db)):
                 next_path = "/"
     try:
         token = await oauth.oidc.authorize_access_token(request)
-        claims = token.get("userinfo") or await oauth.oidc.userinfo(token=token)
+        claims = dict(token.get("userinfo") or {})
+        userinfo = await _oidc_userinfo(token)
+        if userinfo:
+            claims.update(userinfo)
     except OAuthError as exc:
         flash(request, f"OIDC 登录失败：{exc.error}", "error")
         return RedirectResponse("/admin", status_code=303)
@@ -385,14 +410,21 @@ async def oidc_callback(request: Request, db: Session = Depends(get_db)):
         user = User(
             username=username,
             email=email_address,
-            display_name=str(claims.get("name") or username),
+            display_name=str(claims.get("name") or claims.get("preferred_username") or username),
             oidc_subject=oidc_subject,
             role="admin" if is_admin else "member",
         )
         db.add(user)
     else:
         user.oidc_subject = oidc_subject
-        user.display_name = str(claims.get("name") or user.display_name)
+        user.display_name = str(claims.get("name") or claims.get("preferred_username") or user.display_name)
+        if email_address:
+            user.email = email_address
+        new_username = str(claims.get("preferred_username") or "")
+        if new_username and new_username != user.username:
+            taken = db.scalar(select(User.id).where(User.username == new_username, User.id != user.id))
+            if not taken:
+                user.username = new_username
         if is_admin:
             user.role = "admin"
     db.commit()
