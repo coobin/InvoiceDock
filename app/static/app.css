@@ -543,6 +543,7 @@ label input, label select, label textarea { display: block; margin-top: 5px; col
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
 }
 
+[hidden] { display: none !important; }
 .warn-chip { display: inline-block; margin-top: 4px; color: #a05a12; font-size: 9px; font-weight: 700; }
 .title-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
 .title-card { padding: 14px 16px; border: 1px solid #d5dfe4; border-radius: 10px; background: #fff; }
