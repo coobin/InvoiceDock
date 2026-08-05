@@ -54,7 +54,7 @@ from app.services.settings_service import (
     update_integrations,
     user_custom_integrations,
 )
-from app.services.title_service import env_presets, title_warning, user_titles
+from app.services.title_service import env_presets, user_titles
 from app.services.verifier import process_invoice, test_kingdee, test_llm, test_piaozone
 
 settings = get_settings()
@@ -657,19 +657,10 @@ async def save_invoice(invoice_id: str, request: Request, db: Session = Depends(
     form = await request.form()
     validate_csrf(request, str(form.get("csrf_token", "")))
     invoice = owned_invoice(request, db, user, invoice_id)
-    text_fields = [
-        "invoice_type", "invoice_code", "invoice_number", "invoice_date", "check_code", "seller_name", "seller_tax_id",
-        "buyer_name", "buyer_tax_id", "category", "notes",
-    ]
-    for field in text_fields:
-        if field in form:
-            setattr(invoice, field, str(form.get(field, "")).strip())
-    for field in ("amount", "tax_amount", "total_amount"):
-        raw = str(form.get(field, "")).strip()
-        setattr(invoice, field, round(float(raw), 2) if raw else None)
+    invoice.category = str(form.get("category", "")).strip() or "未分类"
+    invoice.notes = str(form.get("notes", "")).strip()
     invoice.status = "reviewed"
     invoice.verified_at = utcnow()
-    invoice.title_warning = title_warning(db, user, invoice.buyer_name, invoice.buyer_tax_id)
     db.commit()
     record_audit(db, request, user, "invoice.review", "invoice", invoice.id)
     flash(request, "人工复核结果已保存")
