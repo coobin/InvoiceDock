@@ -20,6 +20,7 @@ from app.db import SessionLocal
 from app.models import Invoice, JobLog, User
 from app.services.extractor import (
     FIELDS,
+    categorize,
     extract_document,
     image_to_jpeg_bytes,
     parse_invoice_fields,
@@ -496,6 +497,10 @@ def process_invoice(invoice_id: str) -> None:
                 if provider_error:
                     invoice.error_message = f"金蝶查验未完成：{provider_error}；已回退到 {invoice.verification_method.upper()}"
 
+            if invoice.category in ("", "未分类"):
+                invoice.category = categorize(
+                    f"{invoice.original_name}\n{invoice.invoice_type}", invoice.seller_name
+                ) or "未分类"
             owner = db.get(User, invoice.owner_id) if invoice.owner_id else None
             invoice.title_warning = title_warning(db, owner, invoice.buyer_name, invoice.buyer_tax_id)
             duplicate = _find_business_duplicate(invoice, db)
