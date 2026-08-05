@@ -7,17 +7,18 @@ import json
 import logging
 import re
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import httpx
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, delete, or_, select
 
 from app.config import get_settings
 from app.db import SessionLocal
-from app.models import Invoice, JobLog, User
+from app.models import Invoice, JobLog, User, VerificationCache
 from app.services.extractor import (
     FIELDS,
     categorize,
@@ -449,6 +450,70 @@ def _find_business_duplicate(invoice: Invoice, db) -> Invoice | None:  # type: i
     return db.scalar(select(Invoice).where(and_(*filters)).order_by(Invoice.created_at.asc()).limit(1))
 
 
+def _local_now() -> datetime:
+    settings = get_settings()
+    try:
+        zone = ZoneInfo(settings.tz or "Asia/Shanghai")
+    except Exception:
+        zone = UTC
+    return datetime.now(zone)
+
+
+def _today_str() -> str:
+    """按配置时区返回当天日期（YYYY-MM-DD），用于发票号缓存按天划分。"""
+    return _local_now().strftime("%Y-%m-%d")
+
+
+def _find_verification_cache(db, invoice_number: str) -> VerificationCache | None:  # type: ignore[no-untyped-def]
+    """查找当天是否已有同一发票号的发票云查验结果。"""
+    number = (invoice_number or "").strip()
+    if not number:
+        return None
+    return db.scalar(
+        select(VerificationCache)
+        .where(
+            VerificationCache.invoice_number == number,
+            VerificationCache.verify_date == _today_str(),
+        )
+        .order_by(VerificationCache.created_at.asc())
+        .limit(1)
+    )
+
+
+def _save_verification_cache(db, invoice: Invoice, method: str) -> None:  # type: ignore[no-untyped-def]
+    """记录当天已通过发票云查验的发票号，供同日再次上传时跳过发票云。"""
+    number = (invoice.invoice_number or "").strip()
+    if not number:
+        return
+    today = _today_str()
+    row = db.scalar(
+        select(VerificationCache).where(
+            VerificationCache.invoice_number == number,
+            VerificationCache.verify_date == today,
+        )
+    )
+    if row is None:
+        row = VerificationCache(invoice_number=number, verify_date=today)
+        db.add(row)
+    row.method = method
+    row.fields = {field: getattr(invoice, field, None) for field in FIELDS}
+    row.kingdee_data = dict(invoice.kingdee_data or {})
+    row.created_by = invoice.owner_id
+    # 顺手清理 30 天前的旧记录，避免缓存表无限增长
+    cutoff = (_local_now() - timedelta(days=30)).strftime("%Y-%m-%d")
+    db.execute(delete(VerificationCache).where(VerificationCache.verify_date < cutoff))
+
+
+def _apply_cached_verification(invoice: Invoice, cache: VerificationCache) -> None:
+    """把当天发票云查验结果直接复用到新上传的发票记录上。"""
+    _apply_fields(invoice, cache.fields or {})
+    invoice.kingdee_data = dict(cache.kingdee_data or {})
+    invoice.verification_method = cache.method or "verified"
+    invoice.status = "verified"
+    invoice.confidence = 1.0
+    invoice.verified_at = datetime.now(UTC).replace(tzinfo=None)
+
+
 def process_invoice(invoice_id: str) -> None:
     settings = get_settings()
     with SessionLocal() as db:
@@ -466,7 +531,40 @@ def process_invoice(invoice_id: str) -> None:
         llm_allowed = as_bool(config.get("verify_llm", "true"))
         provider_error = ""
         try:
-            if provider_allowed and _piaozone_complete(config):
+            providers_ready = (provider_allowed and _piaozone_complete(config)) or (
+                provider_allowed and _kingdee_complete(config)
+            )
+            cache_hit = False
+            early_extraction = None
+            if providers_ready:
+                # 先本地识别发票号并查当天缓存：若该发票号今天已通过发票云查验，
+                # 直接复用结果，不再调用金蝶发票云（避免重复消耗单票每日查验次数）。
+                candidate = (invoice.invoice_number or "").strip()
+                if not candidate:
+                    try:
+                        text, structured, preview = extract_document(path, invoice.mime_type)
+                        early_extraction = (text, structured, preview)
+                        candidate = (parse_invoice_fields(text, structured).get("invoice_number") or "").strip()
+                    except Exception as exc:
+                        logger.warning("本地识别发票号失败，跳过缓存检查：%s", exc)
+                cache = _find_verification_cache(db, candidate) if candidate else None
+                if cache:
+                    _apply_cached_verification(invoice, cache)
+                    cache_hit = True
+                    db.add(
+                        JobLog(
+                            level="info",
+                            event="verify.cache_hit",
+                            message=f"{invoice.original_name} 发票号当天已查验，直接复用本地结果，未调用金蝶发票云",
+                            details={
+                                "invoice_id": invoice.id,
+                                "invoice_number": cache.invoice_number,
+                                "method": cache.method,
+                            },
+                        )
+                    )
+
+            if provider_allowed and not cache_hit and _piaozone_complete(config):
                 try:
                     fields, raw = verify_with_piaozone(path, config)
                     _apply_fields(invoice, fields)
@@ -479,7 +577,7 @@ def process_invoice(invoice_id: str) -> None:
                     provider_error = str(exc)
                     db.add(JobLog(level="warning", event="piaozone.fallback", message=provider_error, details={"invoice_id": invoice.id}))
 
-            if provider_allowed and invoice.status != "verified" and _kingdee_complete(config):
+            if provider_allowed and not cache_hit and invoice.status != "verified" and _kingdee_complete(config):
                 try:
                     fields, raw = verify_with_kingdee(path, config)
                     _apply_fields(invoice, fields)
@@ -492,13 +590,19 @@ def process_invoice(invoice_id: str) -> None:
                     provider_error = str(exc)
                     db.add(JobLog(level="warning", event="kingdee.fallback", message=provider_error, details={"invoice_id": invoice.id}))
 
+            if not cache_hit and invoice.status == "verified" and invoice.verification_method in {"piaozone", "kingdee"}:
+                _save_verification_cache(db, invoice, invoice.verification_method)
+
             if invoice.status != "verified":
                 if not (ocr_allowed or llm_allowed):
                     invoice.verification_method = ""
                     invoice.status = "review"
                     invoice.error_message = "发票云查验未完成，且已禁用本地 OCR/LLM 回退，请人工处理"
                 else:
-                    text, structured, preview = extract_document(path, invoice.mime_type)
+                    if early_extraction is not None:
+                        text, structured, preview = early_extraction
+                    else:
+                        text, structured, preview = extract_document(path, invoice.mime_type)
                     invoice.raw_text = text[:200000]
                     ocr_fields = parse_invoice_fields(text, structured) if ocr_allowed else {}
                     invoice.ocr_data = ocr_fields

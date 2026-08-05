@@ -196,3 +196,25 @@ class JobLog(Base):
     message: Mapped[str] = mapped_column(Text)
     details: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class VerificationCache(Base):
+    """当天已通过发票云查验的发票号本地缓存。
+
+    同一发票号在当天再次上传时直接复用查验结果，不再调用金蝶发票云，
+    避免消耗单张发票每日查验次数。每个 (发票号, 日期) 只保留一条记录。
+    """
+
+    __tablename__ = "verification_caches"
+    __table_args__ = (
+        UniqueConstraint("invoice_number", "verify_date", name="uq_verify_cache_number_date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    invoice_number: Mapped[str] = mapped_column(String(60), index=True)
+    verify_date: Mapped[str] = mapped_column(String(10), index=True)
+    method: Mapped[str] = mapped_column(String(30), default="")
+    fields: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    kingdee_data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
