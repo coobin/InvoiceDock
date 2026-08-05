@@ -196,10 +196,23 @@ def human_size(value: int) -> str:
     return f"{size:.1f} GB"
 
 
+def asset_version() -> str:
+    """Static asset cache-buster based on file mtime, so JS/CSS changes
+    invalidate browser caches even when the app version stays the same."""
+    static_dir = Path(__file__).parent / "static"
+    latest = 0.0
+    for name in ("app.js", "app.css"):
+        path = static_dir / name
+        if path.exists():
+            latest = max(latest, path.stat().st_mtime)
+    return str(int(latest))
+
+
 templates.env.globals.update(
     csrf_token=csrf_token,
     app_name=settings.app_name,
     app_version=__version__,
+    asset_version=asset_version(),
     status_meta=STATUS_META,
     human_size=human_size,
 )
