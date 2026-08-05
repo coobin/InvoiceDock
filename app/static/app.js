@@ -30,7 +30,7 @@
   });
 
   all('[data-settings-toggle]').forEach((toggle) => {
-    const target = one(toggle.dataset.settingsToggle);
+    const target = document.getElementById(toggle.dataset.settingsToggle);
     if (!target) return;
     const sync = () => { target.hidden = !toggle.checked; };
     toggle.addEventListener('change', sync);
