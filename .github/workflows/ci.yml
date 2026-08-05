@@ -20,5 +20,4 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - run: ruff check app tests
       - run: pytest
-      - run: docker build -t invoicer-ci .
-
+      - run: docker build -t invoicedock-ci .
