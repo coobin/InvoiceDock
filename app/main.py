@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -255,7 +256,9 @@ def sync_mailbox_task(mailbox_id: str) -> None:
 async def friendly_http_errors(request: Request, exc: HTTPException):
     accepts_html = "text/html" in request.headers.get("accept", "")
     if exc.status_code == 401 and accepts_html:
-        return RedirectResponse(f"/login?next={quote(request.url.path)}", status_code=303)
+        if settings.oidc_enabled and oauth.oidc:
+            return RedirectResponse(f"/auth/oidc/login?next={quote(request.url.path)}", status_code=303)
+        return RedirectResponse(f"/admin?next={quote(request.url.path)}", status_code=303)
     if accepts_html and exc.status_code in {403, 404}:
         return templates.TemplateResponse(
             request, "error.html", context(request, title=str(exc.detail), status_code=exc.status_code), status_code=exc.status_code
@@ -281,7 +284,7 @@ def api_status(request: Request, db: Session = Depends(get_db)):
     }
 
 
-@app.get("/login", response_class=HTMLResponse)
+@app.get("/admin", response_class=HTMLResponse)
 def login_page(request: Request, next: str = "/", db: Session = Depends(get_db)):  # noqa: A002
     if current_user(request, db):
         return RedirectResponse("/", status_code=303)
@@ -292,6 +295,13 @@ def login_page(request: Request, next: str = "/", db: Session = Depends(get_db))
     )
 
 
+@app.get("/login")
+async def login_alias(request: Request, next: str = "/"):  # noqa: A002
+    safe = next if next.startswith("/") and not next.startswith("//") else "/"
+    return RedirectResponse(f"/admin?next={quote(safe)}", status_code=303)
+
+
+@app.post("/admin")
 @app.post("/login")
 async def login_submit(request: Request, db: Session = Depends(get_db)):
     form = await request.form()
@@ -301,7 +311,7 @@ async def login_submit(request: Request, db: Session = Depends(get_db)):
     user = db.scalar(select(User).where(User.username == username))
     if not user or not user.active or not verify_password(password, user.password_hash):
         flash(request, "用户名或密码不正确", "error")
-        return RedirectResponse("/login", status_code=303)
+        return RedirectResponse("/admin", status_code=303)
     request.session.clear()
     request.session["user_id"] = user.id
     mark_login(user, db)
@@ -317,19 +327,38 @@ async def oidc_login(request: Request):
     if not settings.oidc_enabled or not oauth.oidc:
         raise HTTPException(status_code=404, detail="OIDC 未启用")
     redirect_uri = f"{settings.app_base_url}/auth/oidc/callback"
-    return await oauth.oidc.authorize_redirect(request, redirect_uri)
+    next_path = str(request.query_params.get("next", "/"))
+    if not next_path.startswith("/") or next_path.startswith("//"):
+        next_path = "/"
+    response = await oauth.oidc.authorize_redirect(request, redirect_uri)
+    match = re.search(r"state=([^&]+)", response.headers.get("location", ""))
+    if match:
+        with SessionLocal() as db:
+            row = db.get(OAuthState, match.group(1))
+            if row:
+                row.data = {**row.data, "next": next_path}
+                db.commit()
+    return response
 
 
 @app.get("/auth/oidc/callback")
 async def oidc_callback(request: Request, db: Session = Depends(get_db)):
     if not settings.oidc_enabled or not oauth.oidc:
         raise HTTPException(status_code=404, detail="OIDC 未启用")
+    state = str(request.query_params.get("state", ""))
+    next_path = "/"
+    if state:
+        row = db.get(OAuthState, state)
+        if row:
+            next_path = str(row.data.get("next", "/"))
+            if not next_path.startswith("/") or next_path.startswith("//"):
+                next_path = "/"
     try:
         token = await oauth.oidc.authorize_access_token(request)
         claims = token.get("userinfo") or await oauth.oidc.userinfo(token=token)
     except OAuthError as exc:
         flash(request, f"OIDC 登录失败：{exc.error}", "error")
-        return RedirectResponse("/login", status_code=303)
+        return RedirectResponse("/admin", status_code=303)
     subject = str(claims.get("sub", ""))
     email_address = str(claims.get("email", "")).lower()
     if not subject:
@@ -371,7 +400,7 @@ async def oidc_callback(request: Request, db: Session = Depends(get_db)):
     request.session["user_id"] = user.id
     mark_login(user, db)
     record_audit(db, request, user, "auth.oidc_login")
-    return RedirectResponse("/", status_code=303)
+    return RedirectResponse(next_path, status_code=303)
 
 
 @app.post("/logout")
@@ -382,7 +411,7 @@ async def logout(request: Request, db: Session = Depends(get_db)):
     if user:
         record_audit(db, request, user, "auth.logout")
     request.session.clear()
-    return RedirectResponse("/login", status_code=303)
+    return RedirectResponse("/admin", status_code=303)
 
 
 @app.get("/profile", response_class=HTMLResponse)

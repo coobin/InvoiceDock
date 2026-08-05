@@ -21,8 +21,8 @@
     <div class="login-card">
       <span class="ticket-label">工作台通行证</span>
       <h2>登录票舱</h2>
-      <p class="muted">使用本地管理员，或由组织的身份服务登录。</p>
-      <form method="post" action="/login" class="stack-form">
+      <p class="muted">系统默认通过组织身份服务（OIDC）自动登录，这里仅用于本地管理员手动登录。</p>
+      <form method="post" action="/admin" class="stack-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
         <input type="hidden" name="next" value="{{ next_path }}">
         <label>用户名<input name="username" autocomplete="username" required autofocus placeholder="admin"></label>
@@ -31,7 +31,7 @@
       </form>
       {% if oidc_enabled %}
       <div class="or"><span>或</span></div>
-      <a class="button secondary wide" href="/auth/oidc/login">使用 OIDC 登录</a>
+      <a class="button secondary wide" href="/auth/oidc/login">改用 OIDC 登录</a>
       {% endif %}
       <div class="privacy-note"><span>⌂</span><p><strong>数据边界</strong><br>本系统默认仅在当前部署环境内保存发票文件。</p></div>
     </div>
