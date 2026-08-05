@@ -18,10 +18,10 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import SessionLocal
-from app.models import JobLog, Mailbox, ProcessedEmail, utcnow
+from app.models import Invoice, JobLog, Mailbox, ProcessedEmail, utcnow
 from app.security import decrypt_secret
 from app.services.ingestion import ALLOWED_EXTENSIONS, extract_zip_candidates, ingest_bytes
-from app.services.verifier import process_invoice
+from app.services.verifier import has_invoice_identity, process_invoice
 
 logger = logging.getLogger(__name__)
 URL_RE = re.compile(r"https?://[^\s<>\"']+", re.I)
@@ -168,6 +168,30 @@ def _attachment_candidates(message: Message) -> list[tuple[str, bytes]]:
     return candidates
 
 
+def _discard_non_invoice(db: Session, invoice) -> bool:
+    """Email attachments that contain no invoice identity are discarded
+    entirely (record + local files) so unrelated documents never enter the
+    ledger. Returns True when the invoice was discarded."""
+    if has_invoice_identity(invoice):
+        return False
+    settings = get_settings()
+    original = settings.upload_dir / invoice.stored_name
+    preview = settings.preview_dir / f"{invoice.id}.jpg"
+    db.add(
+        JobLog(
+            level="warning",
+            event="email.discard_non_invoice",
+            message=f"{invoice.original_name} 未识别到发票要素，已自动丢弃",
+            details={"invoice_id": invoice.id},
+        )
+    )
+    db.delete(invoice)
+    db.commit()
+    original.unlink(missing_ok=True)
+    preview.unlink(missing_ok=True)
+    return True
+
+
 def sync_mailbox(db: Session, mailbox: Mailbox) -> dict[str, int]:
     client = _connect(mailbox)
     imported = 0
@@ -208,8 +232,12 @@ def sync_mailbox(db: Session, mailbox: Mailbox) -> dict[str, int]:
                         owner_id=mailbox.created_by,
                     )
                     if created:
-                        current_imported += 1
                         process_invoice(invoice.id)
+                        db.expire_all()
+                        fresh = db.get(Invoice, invoice.id)
+                        if fresh and _discard_non_invoice(db, fresh):
+                            continue
+                        current_imported += 1
                 urls: set[str] = set()
                 for body in _email_bodies(message):
                     urls.update(URL_RE.findall(body))
@@ -228,8 +256,12 @@ def sync_mailbox(db: Session, mailbox: Mailbox) -> dict[str, int]:
                             owner_id=mailbox.created_by,
                         )
                         if created:
-                            current_imported += 1
                             process_invoice(invoice.id)
+                            db.expire_all()
+                            fresh = db.get(Invoice, invoice.id)
+                            if fresh and _discard_non_invoice(db, fresh):
+                                continue
+                            current_imported += 1
                     except Exception as exc:
                         logger.info("Invoice link not imported (%s): %s", url, exc)
                 imported += current_imported

@@ -1,4 +1,11 @@
-from app.services.verifier import _provider_fields_valid, compare_sources, map_external_fields
+from types import SimpleNamespace
+
+from app.services.verifier import (
+    _provider_fields_valid,
+    compare_sources,
+    has_invoice_identity,
+    map_external_fields,
+)
 
 
 def test_dual_source_marks_consistent_when_critical_fields_match():
@@ -41,6 +48,13 @@ def test_provider_fields_valid_requires_real_invoice_identity():
     assert _provider_fields_valid({"invoice_number": "123", "total_amount": None, "seller_name": "A"}) is False
     assert _provider_fields_valid({"invoice_number": "123", "total_amount": 20.0, "seller_name": "", "buyer_name": ""}) is False
     assert _provider_fields_valid({"invoice_number": "123", "total_amount": 20.0, "buyer_name": "B"}) is True
+
+
+def test_has_invoice_identity():
+    assert has_invoice_identity(SimpleNamespace(invoice_number="1", total_amount=None, seller_name="", buyer_name="")) is True
+    assert has_invoice_identity(SimpleNamespace(invoice_number="", total_amount=0.0, seller_name="", buyer_name="")) is True
+    assert has_invoice_identity(SimpleNamespace(invoice_number="", total_amount=None, seller_name="A", buyer_name="")) is True
+    assert has_invoice_identity(SimpleNamespace(invoice_number="", total_amount=None, seller_name="", buyer_name="")) is False
 
 
 def test_kingdee_alias_mapping():

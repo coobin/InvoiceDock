@@ -218,6 +218,17 @@ def _provider_fields_valid(fields: dict[str, Any]) -> bool:
     )
 
 
+def has_invoice_identity(invoice: Invoice) -> bool:
+    """A document is treated as an invoice when extraction produced at least
+    one of: 发票号码 / 金额 / 销售方 / 购买方."""
+    return bool(
+        invoice.invoice_number
+        or invoice.total_amount is not None
+        or invoice.seller_name
+        or invoice.buyer_name
+    )
+
+
 def _piaozone_sign(client_id: str, client_secret: str, timestamp: str, method: str) -> tuple[str, int]:
     text = f"{client_id}{client_secret}{timestamp}"
     method = (method or "MD5").upper()
