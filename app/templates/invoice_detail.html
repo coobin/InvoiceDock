@@ -59,7 +59,7 @@
 
 <section class="panel comparison-panel">
   <div class="section-title"><div><span class="eyebrow">EVIDENCE TRACE</span><h2>字段来源对照</h2><p>空值不会被当作一致；金额容差为 0.01 元。</p></div><div class="confidence-dial" style="--score: {{ invoice.confidence * 100 }}"><strong>{{ '%.0f'|format(invoice.confidence * 100) }}%</strong><small>一致度</small></div></div>
-  {% if invoice.verification_method == 'kingdee' %}
+  {% if invoice.verification_method in ['kingdee', 'piaozone'] %}
     <div class="kingdee-proof"><span class="seal">已<br>查验</span><div><h3>金蝶发票云识别查验成功</h3><p>结构化字段来自金蝶返回，完整原始响应已保存在记录中。仍建议按组织财务制度抽查。</p></div></div>
   {% else %}
   <div class="comparison-table-wrap"><table class="comparison-table"><thead><tr><th>字段</th><th>本地 OCR / 文本层</th><th>LLM 独立提取</th><th>结论</th></tr></thead><tbody>

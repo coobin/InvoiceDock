@@ -178,7 +178,7 @@ templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 STATUS_META = {
     "pending": ("待处理", "muted"),
     "processing": ("处理中", "progress"),
-    "verified": ("金蝶已查验", "verified"),
+    "verified": ("税务已查验", "verified"),
     "consistent": ("双源一致", "consistent"),
     "review": ("待人工复核", "review"),
     "reviewed": ("人工已复核", "reviewed"),

@@ -30,7 +30,7 @@
         <td><strong class="seller">{{ item.seller_name or '销售方待识别' }}</strong><small class="category-chip">{{ item.category }}</small></td>
         <td><span class="mono">{{ item.invoice_date or '—' }}</span><small>{{ item.source.replace('email-link','邮件链接').replace('email','邮箱').replace('upload','上传') }}</small></td>
         <td class="money"><strong>{{ '¥ %.2f'|format(item.total_amount) if item.total_amount is not none else '—' }}</strong><small>{{ '税额 %.2f'|format(item.tax_amount) if item.tax_amount is not none else '' }}</small></td>
-        <td><span class="method method-{{ item.verification_method or 'none' }}">{{ {'kingdee':'金蝶发票云','dual':'OCR + LLM','ocr':'本地 OCR'}.get(item.verification_method, '等待处理') }}</span><small>{{ '%.0f%% 一致'|format(item.confidence * 100) if item.verification_method == 'dual' else '' }}</small></td>
+        <td><span class="method method-{{ item.verification_method or 'none' }}">{{ {'kingdee':'金蝶发票云','piaozone':'金蝶发票云','dual':'OCR + LLM','ocr':'本地 OCR'}.get(item.verification_method, '等待处理') }}</span><small>{{ '%.0f%% 一致'|format(item.confidence * 100) if item.verification_method == 'dual' else '' }}</small></td>
         <td><span class="status {{ meta[1] }}">{{ meta[0] }}</span>{% if item.title_warning %}<small class="warn-chip">抬头警示</small>{% endif %}{% if item.duplicate_of %}<small>与已有票重复</small>{% endif %}</td>
         <td><a class="row-arrow" href="/invoices/{{ item.id }}" aria-label="查看详情">→</a></td>
       </tr>
