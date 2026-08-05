@@ -3,7 +3,7 @@
 {% block content %}
 <header class="page-head"><div><span class="eyebrow">INVOICE TITLES / 收票抬头</span><h1>限定可收取的发票抬头</h1><p>未配置任何抬头时默认收取全部发票；有预设后，仅接受预设抬头、你自行新增的抬头，或包含你姓名的抬头，其他抬头会标记警示。</p></div><button class="button primary" type="button" data-dialog-open="title-dialog">＋ 新增抬头</button></header>
 {% if presets %}
-<section class="panel">
+<section class="panel title-panel">
   <div class="section-title"><div><span class="eyebrow">ADMIN PRESETS</span><h2>管理员预设抬头</h2><p>来自服务器环境变量，只读，对所有用户生效。</p></div></div>
   <div class="title-grid">
     {% for preset in presets %}
@@ -24,7 +24,7 @@
 <div class="notice subtle"><b>未配置预设</b><p>管理员尚未在环境变量中设置抬头，当前默认收取所有发票。</p></div>
 {% endif %}
 <section class="table-panel">
-  <table class="data-table">
+  <table class="data-table title-table">
     <thead><tr><th>单位名称</th><th>税号</th><th>开户行</th><th>账号</th><th></th></tr></thead>
     <tbody>
     {% for item in items %}
