@@ -3,6 +3,7 @@
 {% block content %}
 {% set meta = status_meta.get(invoice.status, (invoice.status, 'muted')) %}
 {% set conflict_fields = invoice.conflicts|map(attribute='field')|list %}
+{% set provider_verified = invoice.verification_method in ['kingdee', 'piaozone'] %}
 <header class="page-head detail-head">
   <div class="breadcrumb"><a href="/invoices">发票台账</a><span>/</span><span>{{ invoice.invoice_number or invoice.original_name }}</span></div>
   <div class="detail-title"><div><span class="eyebrow">INVOICE RECORD</span><h1>{{ invoice.seller_name or '待复核发票' }}</h1><p><span class="mono">{{ invoice.invoice_number or '票号待识别' }}</span> · {{ invoice.original_name }} · {{ human_size(invoice.file_size) }}</p></div><span class="status large {{ meta[1] }}">{{ meta[0] }}</span></div>
@@ -27,29 +28,29 @@
     {% endif %}
   </section>
   <section class="record-panel panel">
-    <div class="section-title compact"><div><h2>入账字段</h2><p>仅“费用分类”和“复核备注”可修改，其余字段来自查验结果，只读。</p></div></div>
+    <div class="section-title compact"><div><h2>入账字段</h2><p>{{ '金蝶查验结果只读，仅“费用分类”和“复核备注”可修改。' if provider_verified else '人工保存后状态变为“人工已复核”' }}</p></div></div>
     <form method="post" action="/invoices/{{ invoice.id }}/save" class="invoice-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
       <div class="form-grid two">
-        <label>发票类型<input name="invoice_type" value="{{ invoice.invoice_type }}" readonly></label>
+        <label>发票类型<input name="invoice_type" value="{{ invoice.invoice_type }}" {{ 'readonly' if provider_verified else '' }}></label>
         <label>费用分类<select name="category">{% for value in ['未分类','交通出行','住宿','餐饮','办公用品','通讯','物流'] %}<option {{ 'selected' if invoice.category == value else '' }}>{{ value }}</option>{% endfor %}</select></label>
-        <label>发票代码<input class="mono" name="invoice_code" value="{{ invoice.invoice_code }}" readonly></label>
-        <label>发票号码<input class="mono" name="invoice_number" value="{{ invoice.invoice_number }}" readonly></label>
-        <label>开票日期<input type="date" name="invoice_date" value="{{ invoice.invoice_date }}" readonly></label>
-        <label>校验码<input class="mono" name="check_code" value="{{ invoice.check_code }}" readonly></label>
+        <label>发票代码<input class="mono" name="invoice_code" value="{{ invoice.invoice_code }}" {{ 'readonly' if provider_verified else '' }}></label>
+        <label>发票号码<input class="mono" name="invoice_number" value="{{ invoice.invoice_number }}" {{ 'readonly' if provider_verified else '' }}></label>
+        <label>开票日期<input type="date" name="invoice_date" value="{{ invoice.invoice_date }}" {{ 'readonly' if provider_verified else '' }}></label>
+        <label>校验码<input class="mono" name="check_code" value="{{ invoice.check_code }}" {{ 'readonly' if provider_verified else '' }}></label>
       </div>
       <div class="form-divider"><span>购销双方</span></div>
       <div class="form-grid two">
-        <label>销售方名称<input name="seller_name" value="{{ invoice.seller_name }}" readonly></label>
-        <label>销售方税号<input class="mono" name="seller_tax_id" value="{{ invoice.seller_tax_id }}" readonly></label>
-        <label>购买方名称<input name="buyer_name" value="{{ invoice.buyer_name }}" readonly></label>
-        <label>购买方税号<input class="mono" name="buyer_tax_id" value="{{ invoice.buyer_tax_id }}" readonly></label>
+        <label>销售方名称<input name="seller_name" value="{{ invoice.seller_name }}" {{ 'readonly' if provider_verified else '' }}></label>
+        <label>销售方税号<input class="mono" name="seller_tax_id" value="{{ invoice.seller_tax_id }}" {{ 'readonly' if provider_verified else '' }}></label>
+        <label>购买方名称<input name="buyer_name" value="{{ invoice.buyer_name }}" {{ 'readonly' if provider_verified else '' }}></label>
+        <label>购买方税号<input class="mono" name="buyer_tax_id" value="{{ invoice.buyer_tax_id }}" {{ 'readonly' if provider_verified else '' }}></label>
       </div>
       <div class="form-divider"><span>金额</span></div>
       <div class="form-grid three">
-        <label>不含税金额<input type="number" step="0.01" name="amount" value="{{ invoice.amount if invoice.amount is not none else '' }}" readonly></label>
-        <label>税额<input type="number" step="0.01" name="tax_amount" value="{{ invoice.tax_amount if invoice.tax_amount is not none else '' }}" readonly></label>
-        <label class="emphasized">价税合计<input type="number" step="0.01" name="total_amount" value="{{ invoice.total_amount if invoice.total_amount is not none else '' }}" readonly></label>
+        <label>不含税金额<input type="number" step="0.01" name="amount" value="{{ invoice.amount if invoice.amount is not none else '' }}" {{ 'readonly' if provider_verified else '' }}></label>
+        <label>税额<input type="number" step="0.01" name="tax_amount" value="{{ invoice.tax_amount if invoice.tax_amount is not none else '' }}" {{ 'readonly' if provider_verified else '' }}></label>
+        <label class="emphasized">价税合计<input type="number" step="0.01" name="total_amount" value="{{ invoice.total_amount if invoice.total_amount is not none else '' }}" {{ 'readonly' if provider_verified else '' }}></label>
       </div>
       <label>复核备注<textarea name="notes" rows="3" placeholder="记录差异判断、报销批次等信息">{{ invoice.notes }}</textarea></label>
       <button class="button primary wide" type="submit">保存人工复核结果</button>

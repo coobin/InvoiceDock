@@ -657,8 +657,21 @@ async def save_invoice(invoice_id: str, request: Request, db: Session = Depends(
     form = await request.form()
     validate_csrf(request, str(form.get("csrf_token", "")))
     invoice = owned_invoice(request, db, user, invoice_id)
-    invoice.category = str(form.get("category", "")).strip() or "未分类"
-    invoice.notes = str(form.get("notes", "")).strip()
+    provider_verified = invoice.verification_method in ("kingdee", "piaozone")
+    if provider_verified:
+        invoice.category = str(form.get("category", "")).strip() or "未分类"
+        invoice.notes = str(form.get("notes", "")).strip()
+    else:
+        text_fields = [
+            "invoice_type", "invoice_code", "invoice_number", "invoice_date", "check_code", "seller_name", "seller_tax_id",
+            "buyer_name", "buyer_tax_id", "category", "notes",
+        ]
+        for field in text_fields:
+            if field in form:
+                setattr(invoice, field, str(form.get(field, "")).strip())
+        for field in ("amount", "tax_amount", "total_amount"):
+            raw = str(form.get(field, "")).strip()
+            setattr(invoice, field, round(float(raw), 2) if raw else None)
     invoice.status = "reviewed"
     invoice.verified_at = utcnow()
     db.commit()
