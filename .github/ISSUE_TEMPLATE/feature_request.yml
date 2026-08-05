@@ -1,0 +1,24 @@
+name: Feature request
+description: Propose a focused workflow or integration improvement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: Describe the job or risk, not only a preferred implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed outcome
+    validations:
+      required: true
+  - type: textarea
+    id: privacy
+    attributes:
+      label: Privacy, licensing, and verification semantics
+      description: Note whether invoice data leaves the instance and what official or model evidence is involved.
+

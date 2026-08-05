@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}邮箱收票 · {{ app_name }}{% endblock %}
+{% block content %}
+<header class="page-head"><div><span class="eyebrow">MAIL INTAKE / 邮箱收票</span><h1>让发票自己抵达</h1><p>每 {{ request.app.state.mail_interval if request.app.state.mail_interval else 10 }} 分钟扫描新增邮件；授权码加密保存，原邮件不会被删除或标记。</p></div><button class="button primary" type="button" data-dialog-open="mailbox-dialog">＋ 连接邮箱</button></header>
+<div class="provider-hints"><span><b>QQ</b>imap.qq.com : 993</span><span><b>163</b>imap.163.com : 993</span><span><b>企业邮箱</b>使用服务商提供的 IMAP 地址</span></div>
+<section class="mailbox-grid">
+{% for item in items %}
+  <article class="mailbox-card {{ 'paused' if not item.enabled else '' }}">
+    <div class="mailbox-top"><span class="mail-glyph">@</span><div><h2>{{ item.name }}</h2><p>{{ item.username }}</p></div><span class="status {{ 'verified' if item.enabled else 'muted' }}">{{ '自动收取' if item.enabled else '已暂停' }}</span></div>
+    <dl><div><dt>服务器</dt><dd>{{ item.host }}:{{ item.port }}</dd></div><div><dt>文件夹</dt><dd>{{ item.folder }}</dd></div><div><dt>游标 UID</dt><dd class="mono">{{ item.last_uid or '—' }}</dd></div><div><dt>上次收取</dt><dd>{{ item.last_sync_at.strftime('%m-%d %H:%M') if item.last_sync_at else '尚未收取' }}</dd></div></dl>
+    {% if item.last_error %}<div class="mail-error">{{ item.last_error }}</div>{% endif %}
+    <div class="card-actions">
+      <form action="/mailboxes/{{ item.id }}/test" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="button secondary small">测试连接</button></form>
+      <form action="/mailboxes/{{ item.id }}/sync" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="button primary small">立即收取</button></form>
+      <form action="/mailboxes/{{ item.id }}/toggle" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="text-button">{{ '暂停' if item.enabled else '启用' }}</button></form>
+      <form action="/mailboxes/{{ item.id }}/delete" method="post" data-confirm="删除邮箱配置？已经导入的发票不会被删除。"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="text-button danger-text">删除</button></form>
+    </div>
+  </article>
+{% else %}<div class="empty mailbox-empty"><b>收</b><h3>还没有收票邮箱</h3><p>连接 QQ、163 或企业邮箱，只读取新增邮件中的发票附件和可直接下载链接。</p><button class="button secondary" type="button" data-dialog-open="mailbox-dialog">连接第一个邮箱</button></div>{% endfor %}
+</section>
+
+<dialog id="mailbox-dialog" class="dialog">
+  <form action="/mailboxes" method="post" class="dialog-card">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <div class="dialog-head"><div><span class="eyebrow">NEW MAILBOX</span><h2>连接收票邮箱</h2></div><button type="button" class="icon-button" data-dialog-close aria-label="关闭">×</button></div>
+    <div class="form-grid two"><label>显示名称<input name="name" required placeholder="例如：报销专用邮箱"></label><label>邮箱账号<input type="email" name="username" required placeholder="name@example.com"></label><label>IMAP 服务器<input name="host" required placeholder="imap.qq.com"></label><label>端口<input type="number" name="port" value="993" min="1" max="65535" required></label><label>文件夹<input name="folder" value="INBOX" required></label><label>授权码 / 应用密码<input type="password" name="password" autocomplete="new-password" required></label></div>
+    <label class="toggle-row"><input type="checkbox" name="use_ssl" checked><span></span><div><strong>使用 SSL/TLS</strong><small>推荐，常用端口为 993</small></div></label>
+    <div class="notice subtle"><b>凭据说明</b><p>QQ/163 等邮箱通常要求“授权码”而不是网页登录密码。凭据使用实例密钥加密后写入数据库。</p></div>
+    <button class="button primary wide" type="submit">保存邮箱连接</button>
+  </form>
+</dialog>
+{% endblock %}
+

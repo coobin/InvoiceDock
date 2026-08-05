@@ -1,0 +1,25 @@
+name: invoicedock
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: invoicedock:local
+    restart: unless-stopped
+    env_file:
+      - .env
+    user: "${PUID:-1000}:${PGID:-1000}"
+    environment:
+      DATA_DIR: /data
+      DATABASE_URL: sqlite:////data/invoicedock.db
+    ports:
+      - "${APP_PORT:-8765}:8000"
+    volumes:
+      - ./data:/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=256m,mode=1777

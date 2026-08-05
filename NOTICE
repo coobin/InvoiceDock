@@ -1,0 +1,20 @@
+InvoiceDock · 票舱
+Copyright 2026 InvoiceDock contributors
+
+This product includes software developed by InvoiceDock contributors and third-party
+open-source dependencies distributed under their respective licenses.
+
+The implementation is original. Product and architecture research considered the
+following publicly available projects and documentation without incorporating code
+from repositories that lacked a usable license or no longer exposed their source:
+
+- EthanYoQ/Invoice-Downloader (Apache-2.0)
+- ke4king/invoice_system (MIT)
+- stone16/Invoice-Manager (no LICENSE file observed during research)
+- EnjoyWT/invoice-pdf-printer (public shell; implementation moved to private submodule)
+- ikunalpha/fapiaodashi (no LICENSE file observed during research)
+- Paperless-ngx, Docspell, TaxHacker and the commercial product 发票盒子
+- Kingdee Invoice Cloud Ultimate API documentation
+
+See docs/RESEARCH.md for links, the comparison, and implementation decisions.
+

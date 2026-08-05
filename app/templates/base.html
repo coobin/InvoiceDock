@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>{% block title %}{{ app_name }}{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}?v={{ app_version }}">
+  <script defer src="{{ url_for('static', path='app.js') }}?v={{ app_version }}"></script>
+</head>
+<body class="{% block body_class %}{% endblock %}">
+{% if user %}
+  <aside class="sidebar" id="sidebar">
+    <a class="brand" href="/" aria-label="返回工作台">
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span><strong>InvoiceDock</strong><small>票舱 · 自托管工作台</small></span>
+    </a>
+    <nav class="process-nav" aria-label="主要导航">
+      <span class="nav-caption">票据流水</span>
+      <a href="/mailboxes" class="{{ 'active' if page == 'mailboxes' else '' }}">
+        <b>收</b><span>邮箱收票<small>IMAP 自动归集</small></span>
+      </a>
+      <a href="/invoices" class="{{ 'active' if page == 'invoices' else '' }}">
+        <b>验</b><span>发票台账<small>查验与一致性</small></span>
+      </a>
+      <a href="/upload" class="{{ 'active' if page == 'upload' else '' }}">
+        <b>入</b><span>手动导入<small>PDF / OFD / XML</small></span>
+      </a>
+      <a href="/print" class="{{ 'active' if page == 'print' else '' }}">
+        <b>印</b><span>打印排版<small>A4 省纸拼版</small></span>
+      </a>
+    </nav>
+    <nav class="utility-nav" aria-label="系统导航">
+      <span class="nav-caption">系统</span>
+      <a href="/" class="{{ 'active' if page == 'dashboard' else '' }}"><span class="nav-icon">⌂</span>工作概览</a>
+      {% if user.role == 'admin' %}
+      <a href="/integrations" class="{{ 'active' if page == 'integrations' else '' }}"><span class="nav-icon">⌁</span>查验集成</a>
+      <a href="/audit" class="{{ 'active' if page == 'audit' else '' }}"><span class="nav-icon">≡</span>审计记录</a>
+      {% endif %}
+      <a href="/profile" class="{{ 'active' if page == 'profile' else '' }}"><span class="nav-icon">○</span>账户安全</a>
+    </nav>
+    <div class="sidebar-foot">
+      <a class="identity" href="/profile" title="账户安全"><span>{{ (user.display_name or user.username)[0] }}</span><div><strong>{{ user.display_name or user.username }}</strong><small>{{ '管理员' if user.role == 'admin' else '成员' }}</small></div></a>
+      <form action="/logout" method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+        <button class="icon-button" title="退出登录" aria-label="退出登录">↗</button>
+      </form>
+    </div>
+  </aside>
+  <button class="mobile-menu" data-sidebar-toggle aria-label="打开导航">☰</button>
+{% endif %}
+  <main class="{{ 'app-main' if user else 'public-main' }}">
+    {% if flash %}<div class="flash flash-{{ flash.kind }}" role="status"><span>{{ '!' if flash.kind == 'error' else '✓' }}</span>{{ flash.message }}<button type="button" data-dismiss aria-label="关闭">×</button></div>{% endif %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}登录 · {{ app_name }}{% endblock %}
+{% block body_class %}login-body{% endblock %}
+{% block content %}
+<section class="login-shell">
+  <div class="login-thesis">
+    <a class="brand brand-large" href="/">
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span><strong>InvoiceDock</strong><small>票舱</small></span>
+    </a>
+    <div class="login-copy">
+      <span class="eyebrow">SELF-HOSTED INVOICE WORKSPACE</span>
+      <h1>让发票沿着一条<br>看得见的流水线前进。</h1>
+      <p>从邮箱归集，到金蝶查验、双源复核，再到 A4 排版。文件与凭据留在你自己的服务器。</p>
+    </div>
+    <div class="mini-pipeline" aria-hidden="true">
+      <span><b>收</b>邮箱附件</span><i></i><span><b>验</b>查验 / OCR</span><i></i><span><b>印</b>打印归档</span>
+    </div>
+  </div>
+  <div class="login-panel">
+    <div class="login-card">
+      <span class="ticket-label">工作台通行证</span>
+      <h2>登录票舱</h2>
+      <p class="muted">使用本地管理员，或由组织的身份服务登录。</p>
+      <form method="post" action="/login" class="stack-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+        <input type="hidden" name="next" value="{{ next_path }}">
+        <label>用户名<input name="username" autocomplete="username" required autofocus placeholder="admin"></label>
+        <label>密码<input type="password" name="password" autocomplete="current-password" required placeholder="输入登录密码"></label>
+        <button class="button primary wide" type="submit">进入工作台 <span>→</span></button>
+      </form>
+      {% if oidc_enabled %}
+      <div class="or"><span>或</span></div>
+      <a class="button secondary wide" href="/auth/oidc/login">使用 OIDC 登录</a>
+      {% endif %}
+      <div class="privacy-note"><span>⌂</span><p><strong>数据边界</strong><br>本系统默认仅在当前部署环境内保存发票文件。</p></div>
+    </div>
+    <small class="version">InvoiceDock {{ app_version }} · Apache-2.0</small>
+  </div>
+</section>
+{% endblock %}

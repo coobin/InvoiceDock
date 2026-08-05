@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}{{ invoice.invoice_number or invoice.original_name }} · {{ app_name }}{% endblock %}
+{% block content %}
+{% set meta = status_meta.get(invoice.status, (invoice.status, 'muted')) %}
+{% set conflict_fields = invoice.conflicts|map(attribute='field')|list %}
+<header class="page-head detail-head">
+  <div class="breadcrumb"><a href="/invoices">发票台账</a><span>/</span><span>{{ invoice.invoice_number or invoice.original_name }}</span></div>
+  <div class="detail-title"><div><span class="eyebrow">INVOICE RECORD</span><h1>{{ invoice.seller_name or '待复核发票' }}</h1><p><span class="mono">{{ invoice.invoice_number or '票号待识别' }}</span> · {{ invoice.original_name }} · {{ human_size(invoice.file_size) }}</p></div><span class="status large {{ meta[1] }}">{{ meta[0] }}</span></div>
+  <div class="head-actions">
+    <a class="button secondary" href="/files/{{ invoice.id }}/original?download=true">下载原件</a>
+    {% if invoice.mime_type in ['application/pdf','image/png','image/jpeg'] %}<a class="button secondary" href="/print?ids={{ invoice.id }}">打印排版</a>{% endif %}
+    <form action="/invoices/{{ invoice.id }}/process" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="button primary">重新查验</button></form>
+  </div>
+</header>
+
+{% if invoice.error_message %}<div class="notice {{ 'error' if invoice.status == 'failed' else 'warning' }}"><b>{{ '处理失败' if invoice.status == 'failed' else '处理说明' }}</b><p>{{ invoice.error_message }}</p></div>{% endif %}
+{% if duplicate %}<div class="notice warning"><b>疑似重复发票</b><p>系统发现业务字段与 <a href="/invoices/{{ duplicate.id }}">{{ duplicate.invoice_number or duplicate.original_name }}</a> 相同，请人工确认是否重复报销。</p></div>{% endif %}
+
+<div class="detail-grid">
+  <section class="document-panel panel">
+    <div class="section-title compact"><div><h2>原始票面</h2><p>系统始终保留未改写的原件</p></div><a href="/files/{{ invoice.id }}/original" target="_blank">新窗口打开 ↗</a></div>
+    {% if invoice.mime_type in ['application/pdf','image/png','image/jpeg'] %}
+      <a class="document-preview" href="/files/{{ invoice.id }}/original" target="_blank"><img src="/files/{{ invoice.id }}/preview" alt="{{ invoice.original_name }} 预览"><span>点击查看原件</span></a>
+    {% else %}
+      <div class="format-placeholder"><span class="file-glyph big">{{ invoice.original_name.split('.')[-1][:3]|upper }}</span><h3>{{ invoice.original_name }}</h3><p>该格式已参与结构化提取，浏览器暂不直接预览。</p><a class="button secondary" href="/files/{{ invoice.id }}/original?download=true">下载原件</a></div>
+    {% endif %}
+  </section>
+  <section class="record-panel panel">
+    <div class="section-title compact"><div><h2>入账字段</h2><p>人工保存后状态变为“人工已复核”</p></div></div>
+    <form method="post" action="/invoices/{{ invoice.id }}/save" class="invoice-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <div class="form-grid two">
+        <label>发票类型<input name="invoice_type" value="{{ invoice.invoice_type }}"></label>
+        <label>费用分类<select name="category">{% for value in ['未分类','交通出行','住宿','餐饮','办公用品','通讯','物流'] %}<option {{ 'selected' if invoice.category == value else '' }}>{{ value }}</option>{% endfor %}</select></label>
+        <label>发票代码<input class="mono" name="invoice_code" value="{{ invoice.invoice_code }}"></label>
+        <label>发票号码<input class="mono" name="invoice_number" value="{{ invoice.invoice_number }}"></label>
+        <label>开票日期<input type="date" name="invoice_date" value="{{ invoice.invoice_date }}"></label>
+        <label>校验码<input class="mono" name="check_code" value="{{ invoice.check_code }}"></label>
+      </div>
+      <div class="form-divider"><span>购销双方</span></div>
+      <div class="form-grid two">
+        <label>销售方名称<input name="seller_name" value="{{ invoice.seller_name }}"></label>
+        <label>销售方税号<input class="mono" name="seller_tax_id" value="{{ invoice.seller_tax_id }}"></label>
+        <label>购买方名称<input name="buyer_name" value="{{ invoice.buyer_name }}"></label>
+        <label>购买方税号<input class="mono" name="buyer_tax_id" value="{{ invoice.buyer_tax_id }}"></label>
+      </div>
+      <div class="form-divider"><span>金额</span></div>
+      <div class="form-grid three">
+        <label>不含税金额<input type="number" step="0.01" name="amount" value="{{ invoice.amount if invoice.amount is not none else '' }}"></label>
+        <label>税额<input type="number" step="0.01" name="tax_amount" value="{{ invoice.tax_amount if invoice.tax_amount is not none else '' }}"></label>
+        <label class="emphasized">价税合计<input type="number" step="0.01" name="total_amount" value="{{ invoice.total_amount if invoice.total_amount is not none else '' }}"></label>
+      </div>
+      <label>复核备注<textarea name="notes" rows="3" placeholder="记录差异判断、报销批次等信息">{{ invoice.notes }}</textarea></label>
+      <button class="button primary wide" type="submit">保存人工复核结果</button>
+    </form>
+  </section>
+</div>
+
+<section class="panel comparison-panel">
+  <div class="section-title"><div><span class="eyebrow">EVIDENCE TRACE</span><h2>字段来源对照</h2><p>空值不会被当作一致；金额容差为 0.01 元。</p></div><div class="confidence-dial" style="--score: {{ invoice.confidence * 100 }}"><strong>{{ '%.0f'|format(invoice.confidence * 100) }}%</strong><small>一致度</small></div></div>
+  {% if invoice.verification_method == 'kingdee' %}
+    <div class="kingdee-proof"><span class="seal">已<br>查验</span><div><h3>金蝶发票云识别查验成功</h3><p>结构化字段来自金蝶返回，完整原始响应已保存在记录中。仍建议按组织财务制度抽查。</p></div></div>
+  {% else %}
+  <div class="comparison-table-wrap"><table class="comparison-table"><thead><tr><th>字段</th><th>本地 OCR / 文本层</th><th>LLM 独立提取</th><th>结论</th></tr></thead><tbody>
+  {% for field, label in field_names.items() %}
+    {% set left = invoice.ocr_data.get(field) if invoice.ocr_data else none %}{% set right = invoice.llm_data.get(field) if invoice.llm_data else none %}
+    <tr class="{{ 'conflict' if field in conflict_fields else '' }}"><th>{{ label }}</th><td>{{ left if left not in [none, ''] else '—' }}</td><td>{{ right if right not in [none, ''] else '—' }}</td><td>{% if field in conflict_fields %}<span class="diff">不一致</span>{% elif left not in [none,''] and right not in [none,''] %}<span class="same">一致</span>{% else %}<span class="missing">证据不足</span>{% endif %}</td></tr>
+  {% endfor %}
+  </tbody></table></div>
+  {% endif %}
+</section>
+<section class="danger-zone"><div><h3>删除这条记录</h3><p>同时删除服务器上的原始文件和缩略图；审计日志会保留。</p></div><form action="/invoices/{{ invoice.id }}/delete" method="post" data-confirm="确定删除这张发票及其原始文件吗？此操作无法撤销。"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="button danger">删除发票</button></form></section>
+{% endblock %}
+

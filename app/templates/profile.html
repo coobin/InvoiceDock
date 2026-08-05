@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}账户安全 · {{ app_name }}{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div>
+    <span class="eyebrow">ACCOUNT / SECURITY</span>
+    <h1>账户安全</h1>
+    <p>查看当前身份，并定期更新本地登录密码。OIDC 身份由组织的身份提供商统一管理。</p>
+  </div>
+</header>
+
+<div class="profile-layout">
+  <section class="panel profile-card">
+    <span class="eyebrow">当前身份</span>
+    <div class="profile-avatar">{{ (user.display_name or user.username)[0] }}</div>
+    <h2>{{ user.display_name or user.username }}</h2>
+    <dl>
+      <div><dt>用户名</dt><dd class="mono">{{ user.username }}</dd></div>
+      <div><dt>邮箱</dt><dd>{{ user.email or '未设置' }}</dd></div>
+      <div><dt>角色</dt><dd>{{ '管理员' if user.role == 'admin' else '成员' }}</dd></div>
+      <div><dt>登录方式</dt><dd>{{ 'OIDC + 本地密码' if user.oidc_subject and user.password_hash else ('OIDC' if user.oidc_subject else '本地密码') }}</dd></div>
+    </dl>
+  </section>
+
+  <section class="panel password-card">
+    <div class="section-title compact">
+      <div><span class="eyebrow">LOCAL PASSWORD</span><h2>修改登录密码</h2></div>
+    </div>
+    {% if user.password_hash %}
+    <form action="/profile/password" method="post" class="form-stack">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <label>当前密码<input type="password" name="current_password" autocomplete="current-password" required></label>
+      <label>新密码<input type="password" name="new_password" autocomplete="new-password" minlength="12" required><small>至少 12 个字符，建议使用密码管理器生成。</small></label>
+      <label>确认新密码<input type="password" name="confirm_password" autocomplete="new-password" minlength="12" required></label>
+      <button class="button primary" type="submit">更新密码</button>
+    </form>
+    {% else %}
+    <div class="empty-state compact"><span>OIDC</span><h3>此账户不使用本地密码</h3><p>请前往组织的身份提供商修改密码和多因素认证设置。</p></div>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

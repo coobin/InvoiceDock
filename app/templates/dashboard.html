@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}工作概览 · {{ app_name }}{% endblock %}
+{% block content %}
+<header class="page-head dashboard-head">
+  <div><span class="eyebrow">WORK LEDGER / 工作台</span><h1>发票都走到哪一步了？</h1><p>每张票保留来源、查验路径与人工操作记录。</p></div>
+  <a class="button primary" href="/upload">＋ 导入发票</a>
+</header>
+
+<section class="ledger-strip" aria-label="发票总览">
+  <div class="ledger-total"><small>已归集票据</small><strong>{{ total }}</strong><span>张</span><em>¥ {{ '%.2f'|format(total_amount) }}</em></div>
+  <div class="ledger-metric good"><span>查验 / 复核通过</span><strong>{{ verified }}</strong><small>{{ '%.0f'|format(verified / total * 100) if total else 0 }}%</small></div>
+  <div class="ledger-metric warn"><span>需要处理</span><strong>{{ review }}</strong><small>冲突、重复或失败</small></div>
+  <div class="ledger-metric blue"><span>邮箱自动归集</span><strong>{{ email_count }}</strong><small>其余来自手动上传</small></div>
+</section>
+
+<section class="pipeline-board">
+  <div class="section-title"><div><span class="eyebrow">PROCESS TRACE</span><h2>票据流水线</h2></div><a href="/invoices">查看全部 →</a></div>
+  <div class="pipeline-steps">
+    <a href="/mailboxes"><b>收</b><span><strong>邮箱与上传</strong><small>PDF / OFD / XML / 图片</small></span><i>01</i></a>
+    <a href="/integrations"><b>验</b><span><strong>金蝶优先查验</strong><small>不可用时自动回退</small></span><i>02</i></a>
+    <a href="/invoices?status=review"><b>审</b><span><strong>双源冲突复核</strong><small>OCR 与 LLM 字段并排</small></span><i>03</i></a>
+    <a href="/print"><b>印</b><span><strong>A4 拼版输出</strong><small>每页 1 / 2 / 4 张</small></span><i>04</i></a>
+  </div>
+</section>
+
+<div class="dashboard-grid">
+  <section class="panel recent-panel">
+    <div class="section-title compact"><div><h2>最近入库</h2><p>按接收时间倒序</p></div><a href="/export.xlsx">导出台账</a></div>
+    {% if recent %}
+    <div class="invoice-mini-list">
+      {% for item in recent %}
+      <a href="/invoices/{{ item.id }}">
+        <span class="file-glyph">{{ item.original_name.split('.')[-1][:3]|upper }}</span>
+        <span class="mini-main"><strong>{{ item.seller_name or item.original_name }}</strong><small>{{ item.invoice_number or '待提取票号' }} · {{ item.invoice_date or item.created_at.strftime('%m-%d %H:%M') }}</small></span>
+        <em>{{ '¥ %.2f'|format(item.total_amount) if item.total_amount is not none else '—' }}</em>
+        {% set meta = status_meta.get(item.status, (item.status, 'muted')) %}<span class="status {{ meta[1] }}">{{ meta[0] }}</span>
+      </a>
+      {% endfor %}
+    </div>
+    {% else %}<div class="empty"><b>收</b><h3>还没有发票</h3><p>先上传一张 PDF，或连接用于收票的邮箱。</p><a class="button secondary" href="/upload">导入第一张</a></div>{% endif %}
+  </section>
+  <aside class="side-stack">
+    <section class="panel category-panel">
+      <div class="section-title compact"><div><h2>费用分布</h2><p>按价税合计排序</p></div></div>
+      {% if by_category %}<div class="category-list">
+      {% set max_amount = by_category[0][2] if by_category and by_category[0][2] else 1 %}
+      {% for name, count, amount in by_category %}
+        <div><span><b>{{ name }}</b><small>{{ count }} 张</small></span><em>¥ {{ '%.2f'|format(amount) }}</em><i style="--w: {{ [amount / max_amount * 100, 4]|max }}%"></i></div>
+      {% endfor %}</div>{% else %}<p class="muted">有金额数据后会显示分类分布。</p>{% endif %}
+    </section>
+    <section class="panel log-panel">
+      <div class="section-title compact"><div><h2>运行记录</h2><p>最近的后台任务</p></div></div>
+      <div class="event-list">
+      {% for log in logs %}<div class="event {{ log.level }}"><i></i><span><strong>{{ log.message }}</strong><small>{{ log.created_at.strftime('%m-%d %H:%M') }}</small></span></div>
+      {% else %}<p class="muted">暂无后台任务记录。</p>{% endfor %}
+      </div>
+    </section>
+  </aside>
+</div>
+{% endblock %}
+

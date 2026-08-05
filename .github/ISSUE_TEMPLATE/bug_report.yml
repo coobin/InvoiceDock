@@ -1,0 +1,38 @@
+name: Bug report
+description: Report a reproducible problem without attaching real invoices or secrets
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: "Do not upload real invoices, tax IDs, mailbox credentials, access tokens, or API keys."
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: [Email intake, Upload, Kingdee, OCR/LLM, Review, Print/export, OIDC/auth, Deployment, Other]
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps with synthetic data
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted logs
+

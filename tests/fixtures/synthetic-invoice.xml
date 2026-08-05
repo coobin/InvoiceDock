@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Invoice>
+  <InvoiceTypeName>数电发票（普通发票）</InvoiceTypeName>
+  <InvoiceNo>24500000000012345678</InvoiceNo>
+  <IssueDate>2026-08-01</IssueDate>
+  <BuyerName>云帆示例科技有限公司</BuyerName>
+  <BuyerTaxNo>91440300TEST000001</BuyerTaxNo>
+  <SellerName>远山示例酒店有限公司</SellerName>
+  <SellerTaxNo>91440300TEST000002</SellerTaxNo>
+  <Amount>471.70</Amount>
+  <TaxAmount>28.30</TaxAmount>
+  <TotalAmount>500.00</TotalAmount>
+  <ItemName>住宿服务</ItemName>
+</Invoice>

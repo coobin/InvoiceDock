@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}打印排版 · {{ app_name }}{% endblock %}
+{% block content %}
+<header class="page-head"><div><span class="eyebrow">PRINT STUDIO / 打印排版</span><h1>把票面装进一张 A4</h1><p>服务端生成新 PDF，不修改原件；2 联适合常规电子发票，4 联适合小票。</p></div></header>
+<form action="/print/generate" method="post" class="print-layout" data-print-form>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+  <section class="print-picker panel">
+    <div class="section-title compact"><div><h2>选择发票</h2><p>最多显示最近 100 张可排版文件</p></div><label class="select-all-label"><input type="checkbox" data-print-select-all> 全选</label></div>
+    <div class="print-list">
+    {% for item in items %}
+      {% set meta = status_meta.get(item.status, (item.status, 'muted')) %}
+      <label class="print-item"><input type="checkbox" name="invoice_ids" value="{{ item.id }}" data-print-item {{ 'checked' if item.id in selected_ids else '' }}><span class="checkmark">✓</span><img src="/files/{{ item.id }}/preview" alt=""><span><strong>{{ item.seller_name or item.original_name }}</strong><small>{{ item.invoice_number or item.invoice_date or '待提取字段' }}</small><em>{{ '¥ %.2f'|format(item.total_amount) if item.total_amount is not none else '金额待识别' }}</em></span><i class="status-dot {{ meta[1] }}" title="{{ meta[0] }}"></i></label>
+    {% else %}<div class="empty small"><b>印</b><h3>没有可排版文件</h3><p>PDF 和 JPG/PNG 图片可进入打印排版。</p></div>{% endfor %}
+    </div>
+  </section>
+  <aside class="print-settings">
+    <section class="panel sticky-card">
+      <div class="section-title compact"><div><h2>版式</h2><p><b data-print-count>0</b> 张已选择</p></div></div>
+      <div class="layout-options">
+        <label><input type="radio" name="per_page" value="1"><span class="sheet one"><i></i></span><strong>每页 1 张</strong><small>保持最大尺寸</small></label>
+        <label><input type="radio" name="per_page" value="2" checked><span class="sheet two"><i></i><i></i></span><strong>每页 2 张</strong><small>常用 · 上下排版</small></label>
+        <label><input type="radio" name="per_page" value="4"><span class="sheet four"><i></i><i></i><i></i><i></i></span><strong>每页 4 张</strong><small>适合较小票面</small></label>
+      </div>
+      <div class="print-summary"><span>预计纸张</span><strong><b data-page-count>0</b> 页 A4</strong></div>
+      <button class="button primary wide" type="submit" data-generate-print disabled>生成排版 PDF <span>↓</span></button>
+      <p class="fine-print">多页 PDF 在 1 联模式下保留全部页面；2/4 联模式取每个文件的第一页。</p>
+    </section>
+  </aside>
+</form>
+{% endblock %}
+

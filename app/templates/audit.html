@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}审计记录 · {{ app_name }}{% endblock %}
+{% block content %}
+<header class="page-head"><div><span class="eyebrow">AUDIT TRAIL / 审计记录</span><h1>谁在什么时候改了什么</h1><p>记录登录、上传、人工复核、删除、邮箱与集成配置操作；不记录明文密钥。</p></div></header>
+<section class="table-panel">
+  <table class="data-table audit-table"><thead><tr><th>时间</th><th>操作者</th><th>动作</th><th>对象</th><th>来源 IP</th><th>摘要</th></tr></thead><tbody>
+  {% for item in items %}<tr><td class="mono">{{ item.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td><td>{{ (users.get(item.user_id).display_name or users.get(item.user_id).username) if users.get(item.user_id) else '系统' }}</td><td><span class="audit-action">{{ item.action }}</span></td><td>{{ item.entity_type or '—' }}{% if item.entity_id %}<small class="mono">{{ item.entity_id[:12] }}</small>{% endif %}</td><td class="mono">{{ item.ip_address or '—' }}</td><td><code>{{ item.details }}</code></td></tr>
+  {% else %}<tr><td colspan="6"><div class="empty small"><h3>暂无审计记录</h3></div></td></tr>{% endfor %}
+  </tbody></table>
+</section>
+{% endblock %}
+
