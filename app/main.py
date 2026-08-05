@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote
 
@@ -29,7 +29,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from app import __version__
 from app.config import get_settings
 from app.db import SessionLocal, get_db, init_db
-from app.models import AuditLog, Invoice, JobLog, Mailbox, User, UserTitle, utcnow
+from app.models import AuditLog, Invoice, JobLog, Mailbox, OAuthState, User, UserTitle, utcnow
 from app.security import (
     bootstrap_admin,
     csrf_token,
@@ -73,11 +73,44 @@ if settings.oidc_enabled and settings.oidc_issuer and settings.oidc_client_id:
     )
 
 
+async def _oidc_set_state_data(session, state, data) -> None:  # type: ignore[no-untyped-def]
+    with SessionLocal() as db:
+        for row in db.scalars(select(OAuthState).where(OAuthState.expires_at < utcnow())).all():
+            db.delete(row)
+        row = db.get(OAuthState, state)
+        if row:
+            row.data = data
+            row.expires_at = utcnow() + timedelta(minutes=15)
+        else:
+            db.add(OAuthState(state=state, data=data, expires_at=utcnow() + timedelta(minutes=15)))
+        db.commit()
+
+
+async def _oidc_get_state_data(session, state) -> dict | None:  # type: ignore[no-untyped-def]
+    with SessionLocal() as db:
+        row = db.get(OAuthState, state)
+        if row and row.expires_at > utcnow():
+            return row.data
+        return None
+
+
+async def _oidc_clear_state_data(session, state) -> None:  # type: ignore[no-untyped-def]
+    with SessionLocal() as db:
+        row = db.get(OAuthState, state)
+        if row:
+            db.delete(row)
+            db.commit()
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     for directory in (settings.data_dir, settings.upload_dir, settings.preview_dir, settings.export_dir):
         directory.mkdir(parents=True, exist_ok=True)
     init_db()
+    if oauth.oidc:
+        oauth.oidc.framework.set_state_data = _oidc_set_state_data
+        oauth.oidc.framework.get_state_data = _oidc_get_state_data
+        oauth.oidc.framework.clear_state_data = _oidc_clear_state_data
     with SessionLocal() as db:
         created = bootstrap_admin(db)
         if created:

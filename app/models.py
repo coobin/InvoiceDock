@@ -163,6 +163,17 @@ class UserTitle(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class OAuthState(Base):
+    """服务端 OIDC state 存储。把登录临时状态放数据库而不是会话 cookie，
+    避免浏览器跨站回跳时丢弃 cookie 导致 mismatching_state。"""
+
+    __tablename__ = "oauth_states"
+
+    state: Mapped[str] = mapped_column(String(80), primary_key=True)
+    data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
 
