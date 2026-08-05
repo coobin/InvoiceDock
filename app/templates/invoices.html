@@ -3,7 +3,7 @@
 {% block content %}
 <header class="page-head">
   <div><span class="eyebrow">INVOICE LEDGER / 票据台账</span><h1>发票查验与复核</h1><p>{{ count }} 张发票；双源一致只代表字段交叉验证，金蝶结果才标记为“已查验”。</p></div>
-  <div class="head-actions"><a class="button secondary" href="/export.xlsx?q={{ q|urlencode }}&status={{ filter_status }}&source={{ source }}">导出 Excel</a><a class="button primary" href="/upload">＋ 导入发票</a></div>
+  <div class="head-actions"><span class="batch-count">已选 <b data-selected-count>0</b> 张</span><a class="button secondary" href="/export.xlsx?q={{ q|urlencode }}&status={{ filter_status }}&source={{ source }}">导出 Excel</a><button class="button secondary" type="button" data-print-selected>打印排版</button><button class="button secondary" type="button" data-export-selected>导出原始文件</button><button class="button danger" type="button" data-delete-selected>删除选中</button><a class="button primary" href="/upload">＋ 导入发票</a><input type="hidden" data-batch-csrf value="{{ csrf_token(request) }}"></div>
 </header>
 <form class="control-bar" method="get" action="/invoices">
   <label class="search"><span>⌕</span><input name="q" value="{{ q }}" placeholder="搜索票号、销售方、文件名"></label>
@@ -17,7 +17,6 @@
   <button class="button secondary" type="submit">筛选</button>
   {% if q or filter_status or source %}<a class="clear-filter" href="/invoices">清除</a>{% endif %}
 </form>
-<div class="batch-bar" data-batch-bar hidden><span>已选 <b data-selected-count>0</b> 张</span><button class="button primary small" type="button" data-print-selected>进入打印排版</button><button class="button secondary small" type="button" data-export-selected>导出原始文件（按分类）</button><button class="button danger small" type="button" data-delete-selected>删除选中</button><input type="hidden" data-batch-csrf value="{{ csrf_token(request) }}"></div>
 <section class="table-panel">
   <table class="data-table invoice-table">
     <thead><tr><th class="check"><input type="checkbox" data-select-all aria-label="全选"></th><th>发票</th><th>销售方 / 分类</th><th>开票日期</th><th class="money">价税合计</th><th>验证路径</th><th>状态</th><th></th></tr></thead>

@@ -82,28 +82,37 @@
   const invoiceChecks = all('[data-invoice-select]');
   if (invoiceChecks.length) {
     const selectAll = one('[data-select-all]');
-    const batchBar = one('[data-batch-bar]');
     const count = one('[data-selected-count]');
     const update = () => {
       const checked = invoiceChecks.filter((item) => item.checked);
-      batchBar.hidden = checked.length === 0;
       count.textContent = checked.length;
-      selectAll.checked = checked.length === invoiceChecks.length;
+      selectAll.checked = checked.length === invoiceChecks.length && invoiceChecks.length > 0;
       selectAll.indeterminate = checked.length > 0 && checked.length < invoiceChecks.length;
     };
     invoiceChecks.forEach((item) => item.addEventListener('change', update));
     selectAll?.addEventListener('change', () => { invoiceChecks.forEach((item) => { item.checked = selectAll.checked; }); update(); });
+    const selectedIds = () => invoiceChecks.filter((item) => item.checked).map((item) => item.value);
+    const guardSelection = () => {
+      const ids = selectedIds();
+      if (!ids.length) {
+        window.alert('请先勾选发票');
+        return null;
+      }
+      return ids;
+    };
     one('[data-print-selected]')?.addEventListener('click', () => {
-      const ids = invoiceChecks.filter((item) => item.checked).map((item) => item.value);
+      const ids = guardSelection();
+      if (!ids) return;
       window.location.href = `/print?ids=${encodeURIComponent(ids.join(','))}`;
     });
     one('[data-export-selected]')?.addEventListener('click', () => {
-      const ids = invoiceChecks.filter((item) => item.checked).map((item) => item.value);
+      const ids = guardSelection();
+      if (!ids) return;
       window.location.href = `/export/files?ids=${encodeURIComponent(ids.join(','))}`;
     });
     one('[data-delete-selected]')?.addEventListener('click', () => {
-      const ids = invoiceChecks.filter((item) => item.checked).map((item) => item.value);
-      if (!ids.length) return;
+      const ids = guardSelection();
+      if (!ids) return;
       if (!window.confirm(`确定删除选中的 ${ids.length} 张发票及其原始文件吗？此操作无法恢复。`)) return;
       const form = document.createElement('form');
       form.method = 'POST';
