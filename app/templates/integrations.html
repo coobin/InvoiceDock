@@ -15,9 +15,9 @@
   <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
   <section class="integration-card kingdee-card">
     <div class="integration-head"><div class="integration-number">01</div><div><span class="eyebrow">PRIMARY</span><h2>金蝶发票云 · 识别查验</h2><p>调用旗舰版 <span class="mono">recognitionCheck</span>；凭据完整且启用时优先使用。</p></div>
-      {% if not is_admin %}<label class="switch"><input type="checkbox" name="kingdee_custom" value="1" {{ 'checked' if kd_custom else '' }}><span></span><b>自定义配置</b></label>{% else %}<label class="switch"><input type="checkbox" name="kingdee_enabled" {{ 'checked' if values.kingdee_enabled == 'true' else '' }}><span></span><b>启用</b></label>{% endif %}
+      {% if not is_admin %}<label class="switch"><input type="checkbox" name="kingdee_custom" value="1" {{ 'checked' if kd_custom else '' }} data-settings-toggle="kingdee-settings"><span></span><b>自定义配置</b></label>{% else %}<label class="switch"><input type="checkbox" name="kingdee_enabled" {{ 'checked' if values.kingdee_enabled == 'true' else '' }} data-settings-toggle="kingdee-settings"><span></span><b>启用</b></label>{% endif %}
     </div>
-    <div class="form-grid three">
+    <div class="form-grid three" id="kingdee-settings">
       {% if not is_admin %}<label class="toggle-row compact span-2"><input type="checkbox" name="kingdee_enabled" {{ 'checked' if field_values.kingdee_enabled == 'true' else '' }} {{ 'disabled' if not kd_custom else '' }}><span></span><div><strong>启用金蝶查验</strong><small>关闭后该集成对你个人不生效</small></div></label>{% endif %}
       <label class="span-2">环境地址<input type="url" name="kingdee_base_url" value="{{ field_values.kingdee_base_url }}" placeholder="https://your-tenant.piaozone.com/path" {{ 'disabled' if not is_admin and not kd_custom else '' }}></label>
       <label>租户 ID<input name="kingdee_tenant_id" value="{{ field_values.kingdee_tenant_id or '1' }}" {{ 'disabled' if not is_admin and not kd_custom else '' }}></label>
@@ -33,9 +33,9 @@
   </section>
   <section class="integration-card piaozone-card">
     <div class="integration-head"><div class="integration-number">02</div><div><span class="eyebrow">KINGDEE STANDARD</span><h2>金蝶发票云 · 标准版（Piaozone）</h2><p>client_id / client_secret 签名授权，调用 <span class="mono">img/Check/info</span> 识别查验；配置完整时优先于旗舰版。</p></div>
-      {% if not is_admin %}<label class="switch"><input type="checkbox" name="piaozone_custom" value="1" {{ 'checked' if pz_custom else '' }}><span></span><b>自定义配置</b></label>{% else %}<label class="switch"><input type="checkbox" name="piaozone_enabled" {{ 'checked' if values.piaozone_enabled == 'true' else '' }}><span></span><b>启用</b></label>{% endif %}
+      {% if not is_admin %}<label class="switch"><input type="checkbox" name="piaozone_custom" value="1" {{ 'checked' if pz_custom else '' }} data-settings-toggle="piaozone-settings"><span></span><b>自定义配置</b></label>{% else %}<label class="switch"><input type="checkbox" name="piaozone_enabled" {{ 'checked' if values.piaozone_enabled == 'true' else '' }} data-settings-toggle="piaozone-settings"><span></span><b>启用</b></label>{% endif %}
     </div>
-    <div class="form-grid three">
+    <div class="form-grid three" id="piaozone-settings">
       {% if not is_admin %}<label class="toggle-row compact span-2"><input type="checkbox" name="piaozone_enabled" {{ 'checked' if field_values.piaozone_enabled == 'true' else '' }} {{ 'disabled' if not pz_custom else '' }}><span></span><div><strong>启用金蝶标准版查验</strong><small>关闭后该集成对你个人不生效</small></div></label>{% endif %}
       <label class="span-2">环境地址<input type="url" name="piaozone_base_url" value="{{ field_values.piaozone_base_url }}" placeholder="https://api.piaozone.com" {{ 'disabled' if not is_admin and not pz_custom else '' }}></label>
       <label>Client ID<input name="piaozone_client_id" value="{{ field_values.piaozone_client_id }}" {{ 'disabled' if not is_admin and not pz_custom else '' }}></label>
@@ -49,9 +49,9 @@
   </section>
   <section class="integration-card llm-card">
     <div class="integration-head"><div class="integration-number">03</div><div><span class="eyebrow">FALLBACK</span><h2>OCR + LLM 双源一致性</h2><p>本地 Tesseract/文本层与 OpenAI 兼容接口独立提取；只对共同字段做比对。</p></div>
-      {% if not is_admin %}<label class="switch"><input type="checkbox" name="llm_custom" value="1" {{ 'checked' if llm_custom else '' }}><span></span><b>自定义配置</b></label>{% else %}<label class="switch"><input type="checkbox" name="llm_enabled" {{ 'checked' if values.llm_enabled == 'true' else '' }}><span></span><b>启用</b></label>{% endif %}
+      {% if not is_admin %}<label class="switch"><input type="checkbox" name="llm_custom" value="1" {{ 'checked' if llm_custom else '' }} data-settings-toggle="llm-settings"><span></span><b>自定义配置</b></label>{% else %}<label class="switch"><input type="checkbox" name="llm_enabled" {{ 'checked' if values.llm_enabled == 'true' else '' }} data-settings-toggle="llm-settings"><span></span><b>启用</b></label>{% endif %}
     </div>
-    <div class="form-grid three">
+    <div class="form-grid three" id="llm-settings">
       {% if not is_admin %}<label class="toggle-row compact span-2"><input type="checkbox" name="llm_enabled" {{ 'checked' if field_values.llm_enabled == 'true' else '' }} {{ 'disabled' if not llm_custom else '' }}><span></span><div><strong>启用 LLM 复核</strong><small>关闭后仅使用本地 OCR</small></div></label>{% endif %}
       <label class="span-2">API Base URL<input type="url" name="llm_base_url" value="{{ field_values.llm_base_url }}" placeholder="https://api.openai.com/v1" {{ 'disabled' if not is_admin and not llm_custom else '' }}></label>
       <label>模型<input name="llm_model" value="{{ field_values.llm_model }}" placeholder="gpt-4.1-mini" {{ 'disabled' if not is_admin and not llm_custom else '' }}></label>

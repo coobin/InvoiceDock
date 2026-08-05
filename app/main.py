@@ -130,7 +130,7 @@ async def lifespan(_app: FastAPI):
     for directory in (settings.data_dir, settings.upload_dir, settings.preview_dir, settings.export_dir):
         directory.mkdir(parents=True, exist_ok=True)
     init_db()
-    if oauth.oidc:
+    if settings.oidc_enabled and oauth.oidc:
         oauth.oidc.framework.set_state_data = _oidc_set_state_data
         oauth.oidc.framework.get_state_data = _oidc_get_state_data
         oauth.oidc.framework.clear_state_data = _oidc_clear_state_data

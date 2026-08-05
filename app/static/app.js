@@ -29,6 +29,14 @@
     });
   });
 
+  all('[data-settings-toggle]').forEach((toggle) => {
+    const target = one(toggle.dataset.settingsToggle);
+    if (!target) return;
+    const sync = () => { target.hidden = !toggle.checked; };
+    toggle.addEventListener('change', sync);
+    sync();
+  });
+
   all('form[data-confirm]').forEach((form) => {
     form.addEventListener('submit', (event) => {
       if (!window.confirm(form.dataset.confirm)) event.preventDefault();
@@ -118,4 +126,3 @@
     update();
   }
 })();
-
