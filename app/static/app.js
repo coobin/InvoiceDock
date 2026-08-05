@@ -97,6 +97,33 @@
       const ids = invoiceChecks.filter((item) => item.checked).map((item) => item.value);
       window.location.href = `/print?ids=${encodeURIComponent(ids.join(','))}`;
     });
+    one('[data-export-selected]')?.addEventListener('click', () => {
+      const ids = invoiceChecks.filter((item) => item.checked).map((item) => item.value);
+      window.location.href = `/export/files?ids=${encodeURIComponent(ids.join(','))}`;
+    });
+    one('[data-delete-selected]')?.addEventListener('click', () => {
+      const ids = invoiceChecks.filter((item) => item.checked).map((item) => item.value);
+      if (!ids.length) return;
+      if (!window.confirm(`确定删除选中的 ${ids.length} 张发票及其原始文件吗？此操作无法恢复。`)) return;
+      const form = document.createElement('form');
+      form.method = 'POST';
+      form.action = '/invoices/batch-delete';
+      form.hidden = true;
+      const csrf = document.createElement('input');
+      csrf.type = 'hidden';
+      csrf.name = 'csrf_token';
+      csrf.value = one('[data-batch-csrf]')?.value ?? '';
+      form.append(csrf);
+      ids.forEach((id) => {
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 'invoice_ids';
+        input.value = id;
+        form.append(input);
+      });
+      document.body.append(form);
+      form.submit();
+    });
   }
 
   const printForm = one('[data-print-form]');

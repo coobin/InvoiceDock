@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import logging
 import re
+import zipfile
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
 from pathlib import Path
 from urllib.parse import quote
 
@@ -696,6 +698,71 @@ async def delete_invoice(invoice_id: str, request: Request, db: Session = Depend
     preview.unlink(missing_ok=True)
     flash(request, "发票及其本地文件已删除")
     return RedirectResponse("/invoices", status_code=303)
+
+
+@app.post("/invoices/batch-delete")
+async def invoices_batch_delete(request: Request, db: Session = Depends(get_db)):
+    user = require_page_user(request, db)
+    form = await request.form()
+    validate_csrf(request, str(form.get("csrf_token", "")))
+    ids = [str(value) for value in form.getlist("invoice_ids")]
+    query = select(Invoice).where(Invoice.id.in_(ids))
+    if user.role != "admin":
+        query = query.where(Invoice.owner_id == user.id)
+    invoices = list(db.scalars(query).all())
+    if not invoices:
+        flash(request, "未找到可删除的发票", "error")
+        return RedirectResponse("/invoices", status_code=303)
+    for invoice in invoices:
+        original = settings.upload_dir / invoice.stored_name
+        preview = settings.preview_dir / f"{invoice.id}.jpg"
+        record_audit(db, request, user, "invoice.delete", "invoice", invoice.id, {"filename": invoice.original_name})
+        db.delete(invoice)
+        original.unlink(missing_ok=True)
+        preview.unlink(missing_ok=True)
+    db.commit()
+    flash(request, f"已删除 {len(invoices)} 张发票及其本地文件")
+    return RedirectResponse("/invoices", status_code=303)
+
+
+@app.get("/export/files")
+def export_invoice_files(request: Request, ids: str = "", db: Session = Depends(get_db)):
+    user = require_page_user(request, db)
+    selected_ids = [item for item in ids.split(",") if item]
+    query = select(Invoice).where(Invoice.id.in_(selected_ids))
+    if user.role != "admin":
+        query = query.where(Invoice.owner_id == user.id)
+    invoices = list(db.scalars(query).all())
+    if not invoices:
+        raise HTTPException(status_code=404, detail="没有可导出的发票")
+    buffer = BytesIO()
+    used: set[str] = set()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for invoice in invoices:
+            path = settings.upload_dir / invoice.stored_name
+            if not path.exists():
+                continue
+            category = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", invoice.category or "未分类").strip() or "未分类"
+            filename = invoice.original_name or invoice.stored_name
+            arcname = f"{category}/{filename}"
+            if arcname in used:
+                base, ext = Path(filename).stem, Path(filename).suffix
+                index = 2
+                while f"{category}/{base}-{index}{ext}" in used:
+                    index += 1
+                arcname = f"{category}/{base}-{index}{ext}"
+            used.add(arcname)
+            archive.write(path, arcname)
+    data = buffer.getvalue()
+    if not used:
+        raise HTTPException(status_code=404, detail="所选发票的原始文件不存在")
+    record_audit(db, request, user, "invoice.export_files", details={"count": len(used)})
+    filename = f"invoices-by-category-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}.zip"
+    return Response(
+        data,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.get("/files/{invoice_id}/original")

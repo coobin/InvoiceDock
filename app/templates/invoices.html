@@ -17,7 +17,7 @@
   <button class="button secondary" type="submit">筛选</button>
   {% if q or filter_status or source %}<a class="clear-filter" href="/invoices">清除</a>{% endif %}
 </form>
-<div class="batch-bar" data-batch-bar hidden><span>已选 <b data-selected-count>0</b> 张</span><button class="button primary small" type="button" data-print-selected>进入打印排版</button></div>
+<div class="batch-bar" data-batch-bar hidden><span>已选 <b data-selected-count>0</b> 张</span><button class="button primary small" type="button" data-print-selected>进入打印排版</button><button class="button secondary small" type="button" data-export-selected>导出原始文件（按分类）</button><button class="button danger small" type="button" data-delete-selected>删除选中</button><input type="hidden" data-batch-csrf value="{{ csrf_token(request) }}"></div>
 <section class="table-panel">
   <table class="data-table invoice-table">
     <thead><tr><th class="check"><input type="checkbox" data-select-all aria-label="全选"></th><th>发票</th><th>销售方 / 分类</th><th>开票日期</th><th class="money">价税合计</th><th>验证路径</th><th>状态</th><th></th></tr></thead>
