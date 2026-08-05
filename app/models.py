@@ -130,6 +130,21 @@ class AppSetting(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
+class UserIntegration(Base):
+    """Per-user integration overrides. Admin-level values live in AppSetting;
+    a user's own values fall back to admin settings when absent."""
+
+    __tablename__ = "user_integrations"
+    __table_args__ = (UniqueConstraint("user_id", "key", name="uq_user_integration_key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    key: Mapped[str] = mapped_column(String(100))
+    value: Mapped[str] = mapped_column(Text, default="")
+    encrypted: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
 
@@ -152,4 +167,3 @@ class JobLog(Base):
     message: Mapped[str] = mapped_column(Text)
     details: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
-

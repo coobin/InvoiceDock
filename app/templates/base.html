@@ -33,8 +33,8 @@
     <nav class="utility-nav" aria-label="系统导航">
       <span class="nav-caption">系统</span>
       <a href="/" class="{{ 'active' if page == 'dashboard' else '' }}"><span class="nav-icon">⌂</span>工作概览</a>
-      {% if user.role == 'admin' %}
       <a href="/integrations" class="{{ 'active' if page == 'integrations' else '' }}"><span class="nav-icon">⌁</span>查验集成</a>
+      {% if user.role == 'admin' %}
       <a href="/audit" class="{{ 'active' if page == 'audit' else '' }}"><span class="nav-icon">≡</span>审计记录</a>
       {% endif %}
       <a href="/profile" class="{{ 'active' if page == 'profile' else '' }}"><span class="nav-icon">○</span>账户安全</a>

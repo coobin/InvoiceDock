@@ -36,6 +36,25 @@ class Settings(BaseSettings):
     tz: str = "Asia/Shanghai"
     log_level: str = "INFO"
 
+    # Optional integration overrides (金蝶 / LLM). When a value is set here
+    # (via environment or .env), it takes precedence over database-stored
+    # settings and is never persisted to the database.
+    kingdee_enabled: str = ""
+    kingdee_base_url: str = ""
+    kingdee_app_id: str = ""
+    kingdee_app_secret: str = ""
+    kingdee_account_id: str = ""
+    kingdee_tenant_id: str = ""
+    kingdee_user: str = ""
+    kingdee_org_number: str = ""
+    kingdee_tax_no: str = ""
+    kingdee_company_name: str = ""
+    llm_enabled: str = ""
+    llm_base_url: str = ""
+    llm_api_key: str = ""
+    llm_model: str = ""
+    llm_vision: str = ""
+
     @field_validator("app_base_url", "oidc_issuer")
     @classmethod
     def trim_urls(cls, value: str) -> str:
@@ -61,4 +80,3 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-

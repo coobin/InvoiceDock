@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import AppSetting
+from app.config import get_settings
+from app.models import AppSetting, UserIntegration
 from app.security import decrypt_secret, encrypt_secret
 
 SECRET_KEYS = {
@@ -30,6 +32,25 @@ INTEGRATION_DEFAULTS = {
     "llm_vision": "true",
 }
 
+KINGDEE_KEYS = frozenset(key for key in INTEGRATION_DEFAULTS if key.startswith("kingdee_"))
+LLM_KEYS = frozenset(key for key in INTEGRATION_DEFAULTS if key.startswith("llm_"))
+INTEGRATIONS = ("kingdee", "llm")
+
+
+def env_values() -> dict[str, str]:
+    """Values provided via environment / .env. Non-empty values take
+    precedence over database rows and are never written to the database."""
+    settings = get_settings()
+    return {
+        key: str(getattr(settings, key))
+        for key in INTEGRATION_DEFAULTS
+        if getattr(settings, key, "") not in (None, "")
+    }
+
+
+def get_env_keys() -> set[str]:
+    return set(env_values())
+
 
 def get_value(db: Session, key: str, default: str = "") -> str:
     row = db.get(AppSetting, key)
@@ -49,15 +70,79 @@ def set_value(db: Session, key: str, value: str, secret: bool | None = None) -> 
         db.add(AppSetting(key=key, value=stored, encrypted=encrypted))
 
 
-def get_integrations(db: Session, mask_secrets: bool = False) -> dict[str, str]:
-    values = {key: get_value(db, key, default) for key, default in INTEGRATION_DEFAULTS.items()}
+def _user_rows(db: Session, user_id: str) -> dict[str, str]:
+    rows = db.scalars(select(UserIntegration).where(UserIntegration.user_id == user_id)).all()
+    return {
+        row.key: decrypt_secret(row.value) if row.encrypted else row.value
+        for row in rows
+    }
+
+
+def user_custom_integrations(db: Session, user_id: str) -> set[str]:
+    """Integrations for which the user has saved their own configuration."""
+    rows = _user_rows(db, user_id)
+    return {integration for integration in INTEGRATIONS if f"{integration}_enabled" in rows}
+
+
+def get_integrations(
+    db: Session,
+    user_id: str | None = None,
+    mask_secrets: bool = False,
+) -> dict[str, str]:
+    """Effective integration config for a user.
+
+    Precedence: environment > admin (global) database rows > defaults;
+    a user's own saved configuration overrides everything above it.
+    """
+    values = dict(INTEGRATION_DEFAULTS)
+    values.update(env_values())
+    for key in INTEGRATION_DEFAULTS:
+        values[key] = get_value(db, key, values[key])
+    if user_id:
+        user_vals = _user_rows(db, user_id)
+        for integration in INTEGRATIONS:
+            if f"{integration}_enabled" not in user_vals:
+                continue
+            keys = KINGDEE_KEYS if integration == "kingdee" else LLM_KEYS
+            for key in keys:
+                if key in user_vals:
+                    values[key] = user_vals[key]
     if mask_secrets:
         for key in SECRET_KEYS:
             values[key] = "••••••••" if values.get(key) else ""
     return values
 
 
-def update_integrations(db: Session, values: dict[str, str]) -> None:
+def update_integrations(
+    db: Session,
+    values: dict[str, str],
+    user_id: str | None = None,
+) -> None:
+    if user_id:
+        for key in INTEGRATION_DEFAULTS:
+            if key not in values:
+                continue
+            value = values[key].strip()
+            if key in SECRET_KEYS and value == "••••••••":
+                continue
+            encrypted = key in SECRET_KEYS
+            stored = encrypt_secret(value) if encrypted and value else value
+            row = db.scalar(
+                select(UserIntegration).where(
+                    UserIntegration.user_id == user_id, UserIntegration.key == key
+                )
+            )
+            if row:
+                row.value = stored
+                row.encrypted = encrypted
+            else:
+                db.add(
+                    UserIntegration(
+                        user_id=user_id, key=key, value=stored, encrypted=encrypted
+                    )
+                )
+        db.commit()
+        return
     for key in INTEGRATION_DEFAULTS:
         if key not in values:
             continue
@@ -68,6 +153,17 @@ def update_integrations(db: Session, values: dict[str, str]) -> None:
     db.commit()
 
 
+def clear_user_integration(db: Session, user_id: str, integration: str) -> None:
+    keys = KINGDEE_KEYS if integration == "kingdee" else LLM_KEYS
+    rows = db.scalars(
+        select(UserIntegration).where(
+            UserIntegration.user_id == user_id, UserIntegration.key.in_(keys)
+        )
+    ).all()
+    for row in rows:
+        db.delete(row)
+    db.commit()
+
+
 def as_bool(value: str | bool | None) -> bool:
     return str(value).lower() in {"1", "true", "yes", "on"}
-

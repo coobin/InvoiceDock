@@ -309,7 +309,7 @@ def process_invoice(invoice_id: str) -> None:
         invoice.error_message = ""
         db.commit()
         path = settings.upload_dir / invoice.stored_name
-        config = get_integrations(db)
+        config = get_integrations(db, user_id=invoice.owner_id)
         kingdee_error = ""
         try:
             if _kingdee_complete(config):
@@ -391,4 +391,3 @@ def test_llm(config: dict[str, str]) -> str:
     if not result.get("invoice_number"):
         raise IntegrationError("LLM 已响应，但未按要求返回结构化字段")
     return f"连接成功，模型返回测试票号 {result['invoice_number']}"
-

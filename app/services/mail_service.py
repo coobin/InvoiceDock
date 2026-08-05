@@ -204,7 +204,8 @@ def sync_mailbox(db: Session, mailbox: Mailbox) -> dict[str, int]:
                 current_imported = 0
                 for filename, payload in _attachment_candidates(message):
                     invoice, created = ingest_bytes(
-                        db, payload, filename, source="email", source_ref=f"{mailbox.name} · {subject}"
+                        db, payload, filename, source="email", source_ref=f"{mailbox.name} · {subject}",
+                        owner_id=mailbox.created_by,
                     )
                     if created:
                         current_imported += 1
@@ -223,7 +224,8 @@ def sync_mailbox(db: Session, mailbox: Mailbox) -> dict[str, int]:
                             continue
                         filename, payload = result
                         invoice, created = ingest_bytes(
-                            db, payload, filename, source="email-link", source_ref=f"{mailbox.name} · {subject}"
+                            db, payload, filename, source="email-link", source_ref=f"{mailbox.name} · {subject}",
+                            owner_id=mailbox.created_by,
                         )
                         if created:
                             current_imported += 1
@@ -266,4 +268,3 @@ def scan_all_mailboxes() -> None:
                 sync_mailbox(db, mailbox)
             except Exception:
                 logger.exception("Scheduled mailbox sync failed: %s", mailbox.id)
-

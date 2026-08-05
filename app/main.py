@@ -44,7 +44,15 @@ from app.security import (
 from app.services.export_service import make_invoice_workbook, make_preview, make_print_pdf
 from app.services.ingestion import extract_zip_candidates, ingest_bytes
 from app.services.mail_service import scan_all_mailboxes, sync_mailbox, test_mailbox
-from app.services.settings_service import get_integrations, update_integrations
+from app.services.settings_service import (
+    KINGDEE_KEYS,
+    LLM_KEYS,
+    clear_user_integration,
+    get_env_keys,
+    get_integrations,
+    update_integrations,
+    user_custom_integrations,
+)
 from app.services.verifier import process_invoice, test_kingdee, test_llm
 
 settings = get_settings()
@@ -163,8 +171,10 @@ def require_page_admin(request: Request, db: Session) -> User:
     return user
 
 
-def invoice_query(q: str = "", status: str = "", source: str = ""):
+def invoice_query(q: str = "", status: str = "", source: str = "", user: User | None = None):
     query = select(Invoice)
+    if user and user.role != "admin":
+        query = query.where(Invoice.owner_id == user.id)
     if q:
         pattern = f"%{q.strip()}%"
         query = query.where(
@@ -181,6 +191,24 @@ def invoice_query(q: str = "", status: str = "", source: str = ""):
     if source:
         query = query.where(Invoice.source == source)
     return query
+
+
+def owned_invoice(request: Request, db: Session, user: User, invoice_id: str) -> Invoice:
+    invoice = db.get(Invoice, invoice_id)
+    if not invoice:
+        raise HTTPException(status_code=404, detail="发票不存在")
+    if user.role != "admin" and invoice.owner_id != user.id:
+        raise HTTPException(status_code=403, detail="无权访问该发票")
+    return invoice
+
+
+def owned_mailbox(request: Request, db: Session, user: User, mailbox_id: str) -> Mailbox:
+    mailbox = db.get(Mailbox, mailbox_id)
+    if not mailbox:
+        raise HTTPException(status_code=404, detail="邮箱不存在")
+    if user.role != "admin" and mailbox.created_by != user.id:
+        raise HTTPException(status_code=403, detail="无权操作该邮箱")
+    return mailbox
 
 
 def sync_mailbox_task(mailbox_id: str) -> None:
@@ -364,16 +392,24 @@ async def change_password(request: Request, db: Session = Depends(get_db)):
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request, db: Session = Depends(get_db)):
     user = require_page_user(request, db)
-    total = db.scalar(select(func.count()).select_from(Invoice)) or 0
-    total_amount = db.scalar(select(func.coalesce(func.sum(Invoice.total_amount), 0.0))) or 0.0
-    verified = db.scalar(select(func.count()).select_from(Invoice).where(Invoice.status.in_(["verified", "consistent", "reviewed"]))) or 0
-    review = db.scalar(select(func.count()).select_from(Invoice).where(Invoice.status.in_(["review", "failed", "duplicate"]))) or 0
-    email_count = db.scalar(select(func.count()).select_from(Invoice).where(Invoice.source.in_(["email", "email-link"]))) or 0
-    recent = list(db.scalars(select(Invoice).order_by(Invoice.created_at.desc()).limit(8)).all())
+    owned = Invoice.owner_id == user.id if user.role != "admin" else None
+    total = db.scalar(select(func.count()).select_from(Invoice).where(owned)) or 0
+    total_amount = db.scalar(select(func.coalesce(func.sum(Invoice.total_amount), 0.0)).where(owned)) or 0.0
+    verified = db.scalar(
+        select(func.count()).select_from(Invoice).where(Invoice.status.in_(["verified", "consistent", "reviewed"]), owned)
+    ) or 0
+    review = db.scalar(
+        select(func.count()).select_from(Invoice).where(Invoice.status.in_(["review", "failed", "duplicate"]), owned)
+    ) or 0
+    email_count = db.scalar(
+        select(func.count()).select_from(Invoice).where(Invoice.source.in_(["email", "email-link"]), owned)
+    ) or 0
+    recent = list(db.scalars(select(Invoice).where(owned).order_by(Invoice.created_at.desc()).limit(8)).all())
     logs = list(db.scalars(select(JobLog).order_by(JobLog.created_at.desc()).limit(7)).all())
     by_category = list(
         db.execute(
             select(Invoice.category, func.count(Invoice.id), func.coalesce(func.sum(Invoice.total_amount), 0.0))
+            .where(owned)
             .group_by(Invoice.category)
             .order_by(func.sum(Invoice.total_amount).desc())
             .limit(6)
@@ -410,7 +446,7 @@ def invoices_page(
     user = require_page_user(request, db)
     page = max(page, 1)
     per_page = 25
-    query = invoice_query(q, status, source)
+    query = invoice_query(q, status, source, user)
     count = db.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0
     items = list(db.scalars(query.order_by(Invoice.created_at.desc()).offset((page - 1) * per_page).limit(per_page)).all())
     pages = max(1, (count + per_page - 1) // per_page)
@@ -424,9 +460,7 @@ def invoices_page(
 @app.get("/invoices/{invoice_id}", response_class=HTMLResponse)
 def invoice_detail(invoice_id: str, request: Request, db: Session = Depends(get_db)):
     user = require_page_user(request, db)
-    invoice = db.get(Invoice, invoice_id)
-    if not invoice:
-        raise HTTPException(status_code=404, detail="发票不存在")
+    invoice = owned_invoice(request, db, user, invoice_id)
     duplicate = db.get(Invoice, invoice.duplicate_of) if invoice.duplicate_of else None
     return templates.TemplateResponse(
         request,
@@ -501,9 +535,7 @@ async def reprocess_invoice(invoice_id: str, request: Request, background_tasks:
     user = require_page_user(request, db)
     form = await request.form()
     validate_csrf(request, str(form.get("csrf_token", "")))
-    invoice = db.get(Invoice, invoice_id)
-    if not invoice:
-        raise HTTPException(status_code=404, detail="发票不存在")
+    invoice = owned_invoice(request, db, user, invoice_id)
     invoice.status = "pending"
     db.commit()
     background_tasks.add_task(process_invoice, invoice.id)
@@ -517,9 +549,7 @@ async def save_invoice(invoice_id: str, request: Request, db: Session = Depends(
     user = require_page_user(request, db)
     form = await request.form()
     validate_csrf(request, str(form.get("csrf_token", "")))
-    invoice = db.get(Invoice, invoice_id)
-    if not invoice:
-        raise HTTPException(status_code=404, detail="发票不存在")
+    invoice = owned_invoice(request, db, user, invoice_id)
     text_fields = [
         "invoice_type", "invoice_code", "invoice_number", "invoice_date", "check_code", "seller_name", "seller_tax_id",
         "buyer_name", "buyer_tax_id", "category", "notes",
@@ -543,9 +573,7 @@ async def delete_invoice(invoice_id: str, request: Request, db: Session = Depend
     user = require_page_user(request, db)
     form = await request.form()
     validate_csrf(request, str(form.get("csrf_token", "")))
-    invoice = db.get(Invoice, invoice_id)
-    if not invoice:
-        raise HTTPException(status_code=404, detail="发票不存在")
+    invoice = owned_invoice(request, db, user, invoice_id)
     original = settings.upload_dir / invoice.stored_name
     preview = settings.preview_dir / f"{invoice.id}.jpg"
     record_audit(db, request, user, "invoice.delete", "invoice", invoice.id, {"filename": invoice.original_name})
@@ -559,10 +587,8 @@ async def delete_invoice(invoice_id: str, request: Request, db: Session = Depend
 
 @app.get("/files/{invoice_id}/original")
 def invoice_file(invoice_id: str, request: Request, download: bool = False, db: Session = Depends(get_db)):
-    require_page_user(request, db)
-    invoice = db.get(Invoice, invoice_id)
-    if not invoice:
-        raise HTTPException(status_code=404, detail="文件不存在")
+    user = require_page_user(request, db)
+    invoice = owned_invoice(request, db, user, invoice_id)
     path = settings.upload_dir / invoice.stored_name
     if not path.exists():
         raise HTTPException(status_code=404, detail="原文件已丢失")
@@ -572,10 +598,8 @@ def invoice_file(invoice_id: str, request: Request, download: bool = False, db: 
 
 @app.get("/files/{invoice_id}/preview")
 def invoice_preview(invoice_id: str, request: Request, db: Session = Depends(get_db)):
-    require_page_user(request, db)
-    invoice = db.get(Invoice, invoice_id)
-    if not invoice:
-        raise HTTPException(status_code=404, detail="文件不存在")
+    user = require_page_user(request, db)
+    invoice = owned_invoice(request, db, user, invoice_id)
     path = make_preview(invoice)
     if not path:
         raise HTTPException(status_code=404, detail="该格式暂无缩略图")
@@ -584,14 +608,17 @@ def invoice_preview(invoice_id: str, request: Request, db: Session = Depends(get
 
 @app.get("/mailboxes", response_class=HTMLResponse)
 def mailboxes_page(request: Request, db: Session = Depends(get_db)):
-    user = require_page_admin(request, db)
-    items = list(db.scalars(select(Mailbox).order_by(Mailbox.created_at.desc())).all())
+    user = require_page_user(request, db)
+    query = select(Mailbox)
+    if user.role != "admin":
+        query = query.where(Mailbox.created_by == user.id)
+    items = list(db.scalars(query.order_by(Mailbox.created_at.desc())).all())
     return templates.TemplateResponse(request, "mailboxes.html", context(request, user, page="mailboxes", items=items))
 
 
 @app.post("/mailboxes")
 async def create_mailbox(request: Request, db: Session = Depends(get_db)):
-    user = require_page_admin(request, db)
+    user = require_page_user(request, db)
     form = await request.form()
     validate_csrf(request, str(form.get("csrf_token", "")))
     password = str(form.get("password", ""))
@@ -618,12 +645,10 @@ async def create_mailbox(request: Request, db: Session = Depends(get_db)):
 
 @app.post("/mailboxes/{mailbox_id}/test")
 async def mailbox_test(mailbox_id: str, request: Request, db: Session = Depends(get_db)):
-    user = require_page_admin(request, db)
+    user = require_page_user(request, db)
     form = await request.form()
     validate_csrf(request, str(form.get("csrf_token", "")))
-    mailbox = db.get(Mailbox, mailbox_id)
-    if not mailbox:
-        raise HTTPException(status_code=404, detail="邮箱不存在")
+    mailbox = owned_mailbox(request, db, user, mailbox_id)
     try:
         result = test_mailbox(mailbox)
         flash(request, f"连接成功：{result}")
@@ -635,11 +660,10 @@ async def mailbox_test(mailbox_id: str, request: Request, db: Session = Depends(
 
 @app.post("/mailboxes/{mailbox_id}/sync")
 async def mailbox_sync(mailbox_id: str, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    user = require_page_admin(request, db)
+    user = require_page_user(request, db)
     form = await request.form()
     validate_csrf(request, str(form.get("csrf_token", "")))
-    if not db.get(Mailbox, mailbox_id):
-        raise HTTPException(status_code=404, detail="邮箱不存在")
+    owned_mailbox(request, db, user, mailbox_id)
     background_tasks.add_task(sync_mailbox_task, mailbox_id)
     record_audit(db, request, user, "mailbox.sync", "mailbox", mailbox_id)
     flash(request, "已开始收取邮件，结果会显示在运行记录中")
@@ -648,12 +672,10 @@ async def mailbox_sync(mailbox_id: str, request: Request, background_tasks: Back
 
 @app.post("/mailboxes/{mailbox_id}/toggle")
 async def mailbox_toggle(mailbox_id: str, request: Request, db: Session = Depends(get_db)):
-    user = require_page_admin(request, db)
+    user = require_page_user(request, db)
     form = await request.form()
     validate_csrf(request, str(form.get("csrf_token", "")))
-    mailbox = db.get(Mailbox, mailbox_id)
-    if not mailbox:
-        raise HTTPException(status_code=404, detail="邮箱不存在")
+    mailbox = owned_mailbox(request, db, user, mailbox_id)
     mailbox.enabled = not mailbox.enabled
     db.commit()
     record_audit(db, request, user, "mailbox.toggle", "mailbox", mailbox.id, {"enabled": mailbox.enabled})
@@ -663,12 +685,10 @@ async def mailbox_toggle(mailbox_id: str, request: Request, db: Session = Depend
 
 @app.post("/mailboxes/{mailbox_id}/delete")
 async def mailbox_delete(mailbox_id: str, request: Request, db: Session = Depends(get_db)):
-    user = require_page_admin(request, db)
+    user = require_page_user(request, db)
     form = await request.form()
     validate_csrf(request, str(form.get("csrf_token", "")))
-    mailbox = db.get(Mailbox, mailbox_id)
-    if not mailbox:
-        raise HTTPException(status_code=404, detail="邮箱不存在")
+    mailbox = owned_mailbox(request, db, user, mailbox_id)
     record_audit(db, request, user, "mailbox.delete", "mailbox", mailbox.id, {"name": mailbox.name})
     db.delete(mailbox)
     db.commit()
@@ -678,12 +698,23 @@ async def mailbox_delete(mailbox_id: str, request: Request, db: Session = Depend
 
 @app.get("/integrations", response_class=HTMLResponse)
 def integrations_page(request: Request, db: Session = Depends(get_db)):
-    user = require_page_admin(request, db)
-    values = get_integrations(db, mask_secrets=True)
+    user = require_page_user(request, db)
+    is_admin = user.role == "admin"
+    values = get_integrations(db, user_id=None if is_admin else user.id, mask_secrets=True)
+    own_values = get_integrations(db, user_id=user.id, mask_secrets=True) if not is_admin else {}
+    custom = user_custom_integrations(db, user.id) if not is_admin else set()
+    env_keys = get_env_keys()
+    if is_admin:
+        field_values = values
+    else:
+        field_values = {}
+        for key, integration in ((key, "kingdee" if key.startswith("kingdee_") else "llm") for key in values):
+            field_values[key] = own_values.get(key, "") if integration in custom else ""
     return templates.TemplateResponse(
         request,
         "integrations.html",
-        context(request, user, page="integrations", values=values, oidc={
+        context(request, user, page="integrations", values=values, field_values=field_values,
+                custom=custom, env_keys=env_keys, is_admin=is_admin, oidc={
             "enabled": settings.oidc_enabled, "issuer": settings.oidc_issuer, "client_id": settings.oidc_client_id,
             "callback": f"{settings.app_base_url}/auth/oidc/callback",
         }),
@@ -692,25 +723,39 @@ def integrations_page(request: Request, db: Session = Depends(get_db)):
 
 @app.post("/integrations")
 async def integrations_save(request: Request, db: Session = Depends(get_db)):
-    user = require_page_admin(request, db)
+    user = require_page_user(request, db)
     form = await request.form()
     validate_csrf(request, str(form.get("csrf_token", "")))
-    values = {key: str(value) for key, value in form.items() if key != "csrf_token"}
-    values["kingdee_enabled"] = "true" if form.get("kingdee_enabled") == "on" else "false"
-    values["llm_enabled"] = "true" if form.get("llm_enabled") == "on" else "false"
-    values["llm_vision"] = "true" if form.get("llm_vision") == "on" else "false"
-    update_integrations(db, values)
-    record_audit(db, request, user, "integrations.update", details={"keys": sorted(values)})
-    flash(request, "集成配置已加密保存")
+    if user.role == "admin":
+        values = {key: str(value) for key, value in form.items() if key != "csrf_token"}
+        values["kingdee_enabled"] = "true" if form.get("kingdee_enabled") == "on" else "false"
+        values["llm_enabled"] = "true" if form.get("llm_enabled") == "on" else "false"
+        values["llm_vision"] = "true" if form.get("llm_vision") == "on" else "false"
+        update_integrations(db, values)
+        record_audit(db, request, user, "integrations.update", details={"keys": sorted(values)})
+        flash(request, "全局集成配置已加密保存")
+    else:
+        for integration, keys in (("kingdee", KINGDEE_KEYS), ("llm", LLM_KEYS)):
+            if str(form.get(f"{integration}_custom", "")) != "1":
+                clear_user_integration(db, user.id, integration)
+                continue
+            values = {key: str(form.get(key, "")) for key in keys}
+            values[f"{integration}_enabled"] = "true" if form.get(f"{integration}_enabled") == "on" else "false"
+            if integration == "llm":
+                values["llm_vision"] = "true" if form.get("llm_vision") == "on" else "false"
+            update_integrations(db, values, user_id=user.id)
+            record_audit(db, request, user, "integrations.update", "user", user.id,
+                         {"integration": integration, "keys": sorted(values)})
+        flash(request, "个人集成配置已保存；未自定义的集成回退到管理员配置")
     return RedirectResponse("/integrations", status_code=303)
 
 
 @app.post("/integrations/test/{provider}")
 async def integration_test(provider: str, request: Request, db: Session = Depends(get_db)):
-    user = require_page_admin(request, db)
+    user = require_page_user(request, db)
     form = await request.form()
     validate_csrf(request, str(form.get("csrf_token", "")))
-    config = get_integrations(db)
+    config = get_integrations(db, user_id=None if user.role == "admin" else user.id)
     try:
         result = test_kingdee(config) if provider == "kingdee" else test_llm(config) if provider == "llm" else None
         if result is None:
@@ -727,6 +772,8 @@ def print_page(request: Request, ids: str = "", db: Session = Depends(get_db)):
     user = require_page_user(request, db)
     selected_ids = [item for item in ids.split(",") if item]
     query = select(Invoice).where(Invoice.mime_type.in_(["application/pdf", "image/png", "image/jpeg"]))
+    if user.role != "admin":
+        query = query.where(Invoice.owner_id == user.id)
     if selected_ids:
         query = query.where(Invoice.id.in_(selected_ids))
     items = list(db.scalars(query.order_by(Invoice.created_at.desc()).limit(100)).all())
@@ -740,7 +787,10 @@ async def print_generate(request: Request, db: Session = Depends(get_db)):
     validate_csrf(request, str(form.get("csrf_token", "")))
     ids = [str(value) for value in form.getlist("invoice_ids")]
     per_page = int(str(form.get("per_page", "2")))
-    items = list(db.scalars(select(Invoice).where(Invoice.id.in_(ids))).all())
+    query = select(Invoice).where(Invoice.id.in_(ids))
+    if user.role != "admin":
+        query = query.where(Invoice.owner_id == user.id)
+    items = list(db.scalars(query).all())
     order = {value: index for index, value in enumerate(ids)}
     items.sort(key=lambda item: order.get(item.id, 9999))
     try:
@@ -756,7 +806,7 @@ async def print_generate(request: Request, db: Session = Depends(get_db)):
 @app.get("/export.xlsx")
 def export_excel(request: Request, q: str = "", status: str = "", source: str = "", db: Session = Depends(get_db)):
     user = require_page_user(request, db)
-    items = list(db.scalars(invoice_query(q, status, source).order_by(Invoice.created_at.desc()).limit(10000)).all())
+    items = list(db.scalars(invoice_query(q, status, source, user).order_by(Invoice.created_at.desc()).limit(10000)).all())
     output = make_invoice_workbook(items)
     record_audit(db, request, user, "invoice.export", details={"count": len(items)})
     filename = f"invoice-ledger-{datetime.now(UTC).strftime('%Y%m%d')}.xlsx"

@@ -2,20 +2,52 @@
 {% block title %}查验集成 · {{ app_name }}{% endblock %}
 {% block content %}
 <header class="page-head"><div><span class="eyebrow">VERIFICATION ROUTES / 查验集成</span><h1>定义发票的证据路径</h1><p>优先级固定为金蝶发票云 → OCR + LLM → 人工复核，避免把模型推断冒充官方验真。</p></div></header>
+{% if not is_admin %}
+<div class="notice subtle"><b>个人配置</b><p>未开启“自定义配置”时，使用管理员统一配置；开启后请填写你自己的凭据。凭据加密保存，仅你自己可见。</p></div>
+{% endif %}
+{% if env_keys %}
+<div class="notice subtle"><b>环境变量优先</b><p>以下配置项由服务器环境变量提供，表单与数据库中的值不会生效：{{ env_keys | join('、') }}。</p></div>
+{% endif %}
+{% set kd_custom = not is_admin and 'kingdee' in custom %}
+{% set llm_custom = not is_admin and 'llm' in custom %}
 <form action="/integrations" method="post" class="integration-stack">
   <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
   <section class="integration-card kingdee-card">
-    <div class="integration-head"><div class="integration-number">01</div><div><span class="eyebrow">PRIMARY</span><h2>金蝶发票云 · 识别查验</h2><p>调用旗舰版 <span class="mono">recognitionCheck</span>；凭据完整且启用时优先使用。</p></div><label class="switch"><input type="checkbox" name="kingdee_enabled" {{ 'checked' if values.kingdee_enabled == 'true' else '' }}><span></span><b>启用</b></label></div>
-    <div class="form-grid three"><label class="span-2">环境地址<input type="url" name="kingdee_base_url" value="{{ values.kingdee_base_url }}" placeholder="https://your-tenant.piaozone.com/path"></label><label>租户 ID<input name="kingdee_tenant_id" value="{{ values.kingdee_tenant_id or '1' }}"></label><label>App ID<input name="kingdee_app_id" value="{{ values.kingdee_app_id }}"></label><label>App Secret<input type="password" name="kingdee_app_secret" value="{{ values.kingdee_app_secret }}" autocomplete="new-password"></label><label>Account ID<input name="kingdee_account_id" value="{{ values.kingdee_account_id }}"></label><label>登录用户<input name="kingdee_user" value="{{ values.kingdee_user }}"></label><label>组织编码<input name="kingdee_org_number" value="{{ values.kingdee_org_number }}"></label><label>企业税号<input name="kingdee_tax_no" value="{{ values.kingdee_tax_no }}"></label><label class="span-2">企业名称<input name="kingdee_company_name" value="{{ values.kingdee_company_name }}"></label></div>
+    <div class="integration-head"><div class="integration-number">01</div><div><span class="eyebrow">PRIMARY</span><h2>金蝶发票云 · 识别查验</h2><p>调用旗舰版 <span class="mono">recognitionCheck</span>；凭据完整且启用时优先使用。</p></div>
+      {% if not is_admin %}<label class="switch"><input type="checkbox" name="kingdee_custom" value="1" {{ 'checked' if kd_custom else '' }}><span></span><b>自定义配置</b></label>{% else %}<label class="switch"><input type="checkbox" name="kingdee_enabled" {{ 'checked' if values.kingdee_enabled == 'true' else '' }}><span></span><b>启用</b></label>{% endif %}
+    </div>
+    <div class="form-grid three">
+      {% if not is_admin %}<label class="toggle-row compact span-2"><input type="checkbox" name="kingdee_enabled" {{ 'checked' if field_values.kingdee_enabled == 'true' else '' }} {{ 'disabled' if not kd_custom else '' }}><span></span><div><strong>启用金蝶查验</strong><small>关闭后该集成对你个人不生效</small></div></label>{% endif %}
+      <label class="span-2">环境地址<input type="url" name="kingdee_base_url" value="{{ field_values.kingdee_base_url }}" placeholder="https://your-tenant.piaozone.com/path" {{ 'disabled' if not is_admin and not kd_custom else '' }}></label>
+      <label>租户 ID<input name="kingdee_tenant_id" value="{{ field_values.kingdee_tenant_id or '1' }}" {{ 'disabled' if not is_admin and not kd_custom else '' }}></label>
+      <label>App ID<input name="kingdee_app_id" value="{{ field_values.kingdee_app_id }}" {{ 'disabled' if not is_admin and not kd_custom else '' }}></label>
+      <label>App Secret<input type="password" name="kingdee_app_secret" value="{{ field_values.kingdee_app_secret }}" autocomplete="new-password" placeholder="{{ '由环境变量提供' if 'kingdee_app_secret' in env_keys else '' }}" {{ 'disabled' if not is_admin and not kd_custom else '' }}></label>
+      <label>Account ID<input name="kingdee_account_id" value="{{ field_values.kingdee_account_id }}" {{ 'disabled' if not is_admin and not kd_custom else '' }}></label>
+      <label>登录用户<input name="kingdee_user" value="{{ field_values.kingdee_user }}" {{ 'disabled' if not is_admin and not kd_custom else '' }}></label>
+      <label>组织编码<input name="kingdee_org_number" value="{{ field_values.kingdee_org_number }}" {{ 'disabled' if not is_admin and not kd_custom else '' }}></label>
+      <label>企业税号<input name="kingdee_tax_no" value="{{ field_values.kingdee_tax_no }}" {{ 'disabled' if not is_admin and not kd_custom else '' }}></label>
+      <label class="span-2">企业名称<input name="kingdee_company_name" value="{{ field_values.kingdee_company_name }}" {{ 'disabled' if not is_admin and not kd_custom else '' }}></label>
+    </div>
+    {% if not is_admin %}<div class="privacy-band"><b>{{ '使用我的配置' if kd_custom else '使用管理员配置' }}</b><p>{{ '凭据已加密保存，仅你自己可见。' if kd_custom else '未自定义时，你的发票使用管理员配置的金蝶凭据。' }}</p></div>{% endif %}
   </section>
   <section class="integration-card llm-card">
-    <div class="integration-head"><div class="integration-number">02</div><div><span class="eyebrow">FALLBACK</span><h2>OCR + LLM 双源一致性</h2><p>本地 Tesseract/文本层与 OpenAI 兼容接口独立提取；只对共同字段做比对。</p></div><label class="switch"><input type="checkbox" name="llm_enabled" {{ 'checked' if values.llm_enabled == 'true' else '' }}><span></span><b>启用</b></label></div>
-    <div class="form-grid three"><label class="span-2">API Base URL<input type="url" name="llm_base_url" value="{{ values.llm_base_url }}" placeholder="https://api.openai.com/v1"></label><label>模型<input name="llm_model" value="{{ values.llm_model }}" placeholder="gpt-4.1-mini"></label><label class="span-2">API Key<input type="password" name="llm_api_key" value="{{ values.llm_api_key }}" autocomplete="new-password"></label><label class="toggle-row compact"><input type="checkbox" name="llm_vision" {{ 'checked' if values.llm_vision == 'true' else '' }}><span></span><div><strong>发送票面预览</strong><small>关闭后仅发送 OCR 文本</small></div></label></div>
+    <div class="integration-head"><div class="integration-number">02</div><div><span class="eyebrow">FALLBACK</span><h2>OCR + LLM 双源一致性</h2><p>本地 Tesseract/文本层与 OpenAI 兼容接口独立提取；只对共同字段做比对。</p></div>
+      {% if not is_admin %}<label class="switch"><input type="checkbox" name="llm_custom" value="1" {{ 'checked' if llm_custom else '' }}><span></span><b>自定义配置</b></label>{% else %}<label class="switch"><input type="checkbox" name="llm_enabled" {{ 'checked' if values.llm_enabled == 'true' else '' }}><span></span><b>启用</b></label>{% endif %}
+    </div>
+    <div class="form-grid three">
+      {% if not is_admin %}<label class="toggle-row compact span-2"><input type="checkbox" name="llm_enabled" {{ 'checked' if field_values.llm_enabled == 'true' else '' }} {{ 'disabled' if not llm_custom else '' }}><span></span><div><strong>启用 LLM 复核</strong><small>关闭后仅使用本地 OCR</small></div></label>{% endif %}
+      <label class="span-2">API Base URL<input type="url" name="llm_base_url" value="{{ field_values.llm_base_url }}" placeholder="https://api.openai.com/v1" {{ 'disabled' if not is_admin and not llm_custom else '' }}></label>
+      <label>模型<input name="llm_model" value="{{ field_values.llm_model }}" placeholder="gpt-4.1-mini" {{ 'disabled' if not is_admin and not llm_custom else '' }}></label>
+      <label class="span-2">API Key<input type="password" name="llm_api_key" value="{{ field_values.llm_api_key }}" autocomplete="new-password" placeholder="{{ '由环境变量提供' if 'llm_api_key' in env_keys else '' }}" {{ 'disabled' if not is_admin and not llm_custom else '' }}></label>
+      <label class="toggle-row compact"><input type="checkbox" name="llm_vision" {{ 'checked' if field_values.llm_vision == 'true' else '' }} {{ 'disabled' if not is_admin and not llm_custom else '' }}><span></span><div><strong>发送票面预览</strong><small>关闭后仅发送 OCR 文本</small></div></label>
+    </div>
     <div class="privacy-band"><b>数据出境与隐私</b><p>启用云端 LLM 时，发票文本及可选票面图片会发送给所配置的服务商。请先确认企业数据政策；也可连接内网 Ollama、vLLM 或兼容网关。</p></div>
+    {% if not is_admin %}<div class="privacy-band"><b>{{ '使用我的配置' if llm_custom else '使用管理员配置' }}</b><p>{{ '凭据已加密保存，仅你自己可见。' if llm_custom else '未自定义时，你的发票使用管理员配置的 LLM。' }}</p></div>{% endif %}
   </section>
-  <button class="button primary save-integrations" type="submit">保存并加密配置</button>
+  <button class="button primary save-integrations" type="submit">{{ '保存并加密配置' if is_admin else '保存我的配置' }}</button>
 </form>
-<div class="integration-tests"><form action="/integrations/test/kingdee" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="button secondary">测试已保存的金蝶连接</button></form><form action="/integrations/test/llm" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="button secondary">测试已保存的 LLM 连接</button></form></div>
+<div class="integration-tests"><form action="/integrations/test/kingdee" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="button secondary">测试当前生效的金蝶连接</button></form><form action="/integrations/test/llm" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="button secondary">测试当前生效的 LLM 连接</button></form></div>
+{% if is_admin %}
 <section class="oidc-summary panel"><div><span class="integration-number">ID</span><div><span class="eyebrow">IDENTITY</span><h2>OIDC 登录</h2><p>OIDC 使用环境变量配置，避免客户端密钥进入数据库导出。</p></div><span class="status {{ 'verified' if oidc.enabled else 'muted' }}">{{ '已启用' if oidc.enabled else '未启用' }}</span></div><dl><div><dt>Issuer</dt><dd class="mono">{{ oidc.issuer or '—' }}</dd></div><div><dt>Client ID</dt><dd class="mono">{{ oidc.client_id or '—' }}</dd></div><div><dt>Callback URL</dt><dd class="mono">{{ oidc.callback }}</dd></div></dl></section>
+{% endif %}
 {% endblock %}
-
