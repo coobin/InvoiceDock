@@ -4,7 +4,9 @@ import base64
 import hashlib
 import hmac
 import secrets
+from collections import defaultdict
 from datetime import UTC, datetime
+from time import monotonic
 from typing import Any
 
 from argon2 import PasswordHasher
@@ -18,7 +20,35 @@ from app.config import get_settings
 from app.models import AuditLog, User
 
 password_hasher = PasswordHasher()
+_throttle: dict[str, list[float]] = defaultdict(list)
 
+
+def client_ip(request: Request) -> str:
+    """Best-effort client IP, honoring a single trusted X-Forwarded-For."""
+    forwarded = request.headers.get("x-forwarded-for", "")
+    ip = forwarded.split(",")[0].strip() if forwarded else ""
+    if not ip and request.client:
+        ip = request.client.host
+    return ip or "unknown"
+
+
+def throttle_limit(key: str, limit: int, window_seconds: int) -> bool:
+    """Return True when the key has exceeded `limit` calls in the window.
+
+    Simple in-memory sliding window, sufficient for a single-process
+    uvicorn deployment; restart resets counters (acceptable tradeoff).
+    """
+    now = monotonic()
+    bucket = [stamp for stamp in _throttle[key] if now - stamp < window_seconds]
+    _throttle[key] = bucket
+    if len(bucket) >= limit:
+        return True
+    bucket.append(now)
+    return False
+
+
+def throttle_reset(key: str) -> None:
+    _throttle.pop(key, None)
 
 def hash_password(password: str) -> str:
     return password_hasher.hash(password)
@@ -132,4 +162,3 @@ def record_audit(
 def mark_login(user: User, db: Session) -> None:
     user.last_login_at = datetime.now(UTC).replace(tzinfo=None)
     db.commit()
-

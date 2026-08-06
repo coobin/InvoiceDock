@@ -55,6 +55,10 @@ INTEGRATION_KEYS = {
 }
 INTEGRATIONS = tuple(INTEGRATION_KEYS)
 
+# 管理员可在“查验集成”页开关的 OIDC 登录总闸。OIDC 客户端参数仍由
+# 环境变量提供（避免密钥入库）；此开关只控制登录入口与自动跳转是否生效。
+OIDC_TOGGLE_KEY = "oidc_enabled"
+
 
 def env_values() -> dict[str, str]:
     """Values provided via environment / .env. Non-empty values take
@@ -185,3 +189,12 @@ def clear_user_integration(db: Session, user_id: str, integration: str) -> None:
 
 def as_bool(value: str | bool | None) -> bool:
     return str(value).lower() in {"1", "true", "yes", "on"}
+
+
+def oidc_enabled(db: Session) -> bool:
+    """OIDC 是否实际可用：环境变量已配置 OIDC 且管理员未在界面关闭。"""
+    settings = get_settings()
+    if not (settings.oidc_enabled and settings.oidc_issuer and settings.oidc_client_id):
+        return False
+    default = "true" if settings.oidc_enabled else "false"
+    return as_bool(get_value(db, OIDC_TOGGLE_KEY, default))

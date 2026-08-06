@@ -27,11 +27,10 @@
     const presets = {
       qq: { name: 'QQ 邮箱', host: 'imap.qq.com', port: '993', ssl: true, suffix: 'qq.com' },
       netease: { name: '网易邮箱', host: 'imap.163.com', port: '993', ssl: true, suffix: '163.com' },
-      chency: { name: '承希邮箱', host: 'imap.263.net', port: '993', ssl: true, suffix: 'chencytech.com' },
     };
     const form = mailboxPreset.closest('form');
     const field = (name) => one(`input[name="${name}"]`, form);
-    const presetSuffixes = ['qq.com', 'vip.qq.com', '163.com', 'chencytech.com'];
+    const presetSuffixes = ['qq.com', 'vip.qq.com', '163.com'];
     mailboxPreset.addEventListener('change', () => {
       const preset = presets[mailboxPreset.value];
       if (!preset) return;

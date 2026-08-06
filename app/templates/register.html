@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}登录 · {{ app_name }}{% endblock %}
+{% block title %}注册 · {{ app_name }}{% endblock %}
 {% block body_class %}login-body{% endblock %}
 {% block content %}
 <section class="login-shell">
@@ -13,29 +13,22 @@
       <h1>让发票沿着一条<br>看得见的流水线前进。</h1>
       <p>从邮箱归集，到金蝶查验、双源复核，再到 A4 排版。文件与凭据留在你自己的服务器。</p>
     </div>
-    <div class="mini-pipeline" aria-hidden="true">
-      <span><b>收</b>邮箱附件</span><i></i><span><b>验</b>查验 / OCR</span><i></i><span><b>印</b>打印归档</span>
-    </div>
   </div>
   <div class="login-panel">
     <div class="login-card">
       <span class="ticket-label">工作台通行证</span>
-      <h2>登录票舱</h2>
-      <p class="muted">使用部署管理员分配或注册的本地账号登录{% if oidc_enabled %}，也可通过组织身份服务（OIDC）登录{% endif %}。</p>
-      <form method="post" action="/admin" class="stack-form">
+      <h2>注册账号</h2>
+      <p class="muted">使用邮箱和密码创建普通成员账号；密码经 Argon2 加密存储，本系统不存储明文。</p>
+      <form method="post" action="/register" class="stack-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
         <input type="hidden" name="next" value="{{ next_path }}">
-        <label>邮箱 / 用户名<input name="username" autocomplete="username" required autofocus placeholder="name@example.com"></label>
-        <label>密码<input type="password" name="password" autocomplete="current-password" required placeholder="输入登录密码"></label>
-        <button class="button primary wide" type="submit">进入工作台 <span>→</span></button>
+        <label>邮箱<input type="email" name="email" autocomplete="email" required autofocus placeholder="name@example.com"></label>
+        <label>显示名称<input name="display_name" autocomplete="nickname" maxlength="160" placeholder="可选，默认取邮箱前缀"></label>
+        <label>密码<input type="password" name="password" autocomplete="new-password" required minlength="10" placeholder="至少 10 位，含字母和数字"></label>
+        <label>确认密码<input type="password" name="password_confirm" autocomplete="new-password" required placeholder="再次输入密码"></label>
+        <button class="button primary wide" type="submit">创建账号 <span>→</span></button>
       </form>
-      {% if registration_enabled %}
-      <p class="login-alt">还没有账号？<a href="/register">使用邮箱注册</a></p>
-      {% endif %}
-      {% if oidc_enabled %}
-      <div class="or"><span>或</span></div>
-      <a class="button secondary wide" href="/auth/oidc/login">改用 OIDC 登录</a>
-      {% endif %}
+      <p class="login-alt">已有账号？<a href="/admin">返回登录</a></p>
       <div class="privacy-note"><span>⌂</span><p><strong>数据边界</strong><br>本系统默认仅在当前部署环境内保存发票文件。</p></div>
     </div>
     <small class="version">InvoiceDock {{ app_version }} · Apache-2.0</small>

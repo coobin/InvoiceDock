@@ -135,6 +135,8 @@ label input, label select, label textarea { display: block; margin-top: 5px; col
 .login-card { width: min(430px, 100%); padding: 42px; background: #fff; border: 1px solid var(--rule); box-shadow: 0 30px 70px rgba(29, 57, 76, .13); }
 .ticket-label { display: inline-block; padding: 4px 8px; color: var(--seal); border: 1px solid #e7aaa6; font: 700 9px var(--font-mono); letter-spacing: .12em; transform: rotate(-1deg); }
 .login-card h2 { margin: 24px 0 5px; font-size: 32px; }
+.login-alt { margin: 14px 0 0; font-size: 13px; text-align: center; }
+.login-alt a { color: var(--ink); font-weight: 600; text-underline-offset: 3px; }
 .stack-form { display: flex; margin-top: 26px; flex-direction: column; gap: 15px; }
 .stack-form .button { margin-top: 6px; }
 .or { position: relative; margin: 24px 0; text-align: center; }
@@ -396,6 +398,8 @@ label input, label select, label textarea { display: block; margin-top: 5px; col
 .oidc-summary dl div { min-width: 0; padding: 10px; background: #f4f7f9; border: 1px solid var(--rule); }
 .oidc-summary dt { color: #81919a; font-size: 8px; }
 .oidc-summary dd { margin: 2px 0 0; overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.oidc-toggle { margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--rule-dark); }
+.oidc-toggle .switch { display: inline-flex; }
 
 /* Account */
 .profile-layout { display: grid; max-width: 980px; align-items: start; gap: 22px; grid-template-columns: minmax(260px, .75fr) minmax(360px, 1.25fr); }

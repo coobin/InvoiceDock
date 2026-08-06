@@ -36,12 +36,15 @@ from app.db import SessionLocal, get_db, init_db
 from app.models import AuditLog, Invoice, JobLog, Mailbox, OAuthState, User, UserTitle, utcnow
 from app.security import (
     bootstrap_admin,
+    client_ip,
     csrf_token,
     current_user,
     encrypt_secret,
     hash_password,
     mark_login,
     record_audit,
+    throttle_limit,
+    throttle_reset,
     validate_csrf,
     verify_password,
 )
@@ -50,10 +53,14 @@ from app.services.ingestion import extract_zip_candidates, ingest_bytes
 from app.services.mail_service import scan_all_mailboxes, sync_mailbox, test_mailbox
 from app.services.settings_service import (
     INTEGRATION_KEYS,
+    OIDC_TOGGLE_KEY,
     as_bool,
     clear_user_integration,
     get_env_keys,
     get_integrations,
+    get_value,
+    oidc_enabled,
+    set_value,
     update_integrations,
     user_custom_integrations,
 )
@@ -294,8 +301,9 @@ def sync_mailbox_task(mailbox_id: str) -> None:
 async def friendly_http_errors(request: Request, exc: HTTPException):
     accepts_html = "text/html" in request.headers.get("accept", "")
     if exc.status_code == 401 and accepts_html:
-        if settings.oidc_enabled and oauth.oidc:
-            return RedirectResponse(f"/auth/oidc/login?next={quote(request.url.path)}", status_code=303)
+        with SessionLocal() as db:
+            if oidc_enabled(db) and oauth.oidc:
+                return RedirectResponse(f"/auth/oidc/login?next={quote(request.url.path)}", status_code=303)
         return RedirectResponse(f"/admin?next={quote(request.url.path)}", status_code=303)
     if accepts_html and exc.status_code in {403, 404}:
         return templates.TemplateResponse(
@@ -317,7 +325,7 @@ def api_status(request: Request, db: Session = Depends(get_db)):
         "status": "ok",
         "version": __version__,
         "user": user.username,
-        "oidc": settings.oidc_enabled,
+        "oidc": oidc_enabled(db),
         "mail_scheduler": scheduler.running,
     }
 
@@ -329,7 +337,12 @@ def login_page(request: Request, next: str = "/", db: Session = Depends(get_db))
     return templates.TemplateResponse(
         request,
         "login.html",
-        context(request, next_path=next if next.startswith("/") and not next.startswith("//") else "/", oidc_enabled=settings.oidc_enabled),
+        context(
+            request,
+            next_path=next if next.startswith("/") and not next.startswith("//") else "/",
+            oidc_enabled=oidc_enabled(db),
+            registration_enabled=settings.registration_enabled,
+        ),
     )
 
 
@@ -344,12 +357,17 @@ async def login_alias(request: Request, next: str = "/"):  # noqa: A002
 async def login_submit(request: Request, db: Session = Depends(get_db)):
     form = await request.form()
     validate_csrf(request, str(form.get("csrf_token", "")))
-    username = str(form.get("username", "")).strip()
+    ip = client_ip(request)
+    if throttle_limit(f"login:{ip}", 10, 900):
+        flash(request, "尝试次数过多，请 15 分钟后再试", "error")
+        return RedirectResponse("/admin", status_code=303)
+    username = str(form.get("username", "")).strip().lower()
     password = str(form.get("password", ""))
-    user = db.scalar(select(User).where(User.username == username))
+    user = db.scalar(select(User).where(func.lower(User.username) == username))
     if not user or not user.active or not verify_password(password, user.password_hash):
         flash(request, "用户名或密码不正确", "error")
         return RedirectResponse("/admin", status_code=303)
+    throttle_reset(f"login:{ip}")
     request.session.clear()
     request.session["user_id"] = user.id
     mark_login(user, db)
@@ -360,9 +378,72 @@ async def login_submit(request: Request, db: Session = Depends(get_db)):
     return RedirectResponse(next_path, status_code=303)
 
 
+@app.get("/register", response_class=HTMLResponse)
+def register_page(request: Request, next: str = "/", db: Session = Depends(get_db)):  # noqa: A002
+    if not settings.registration_enabled:
+        return RedirectResponse("/admin", status_code=303)
+    if current_user(request, db):
+        return RedirectResponse("/", status_code=303)
+    return templates.TemplateResponse(
+        request,
+        "register.html",
+        context(
+            request,
+            next_path=next if next.startswith("/") and not next.startswith("//") else "/",
+            registration_enabled=settings.registration_enabled,
+        ),
+    )
+
+
+@app.post("/register")
+async def register_submit(request: Request, db: Session = Depends(get_db)):
+    if not settings.registration_enabled:
+        raise HTTPException(status_code=404, detail="注册已关闭")
+    form = await request.form()
+    validate_csrf(request, str(form.get("csrf_token", "")))
+    ip = client_ip(request)
+    if throttle_limit(f"register:{ip}", 5, 3600):
+        flash(request, "注册尝试过于频繁，请稍后再试", "error")
+        return RedirectResponse("/register", status_code=303)
+    email = str(form.get("email", "")).strip().lower()
+    display_name = str(form.get("display_name", "")).strip()[:160]
+    password = str(form.get("password", ""))
+    confirm = str(form.get("password_confirm", ""))
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        flash(request, "请输入有效的邮箱地址", "error")
+        return RedirectResponse("/register", status_code=303)
+    if len(password) < settings.registration_min_password_length:
+        flash(request, f"密码至少需要 {settings.registration_min_password_length} 位", "error")
+        return RedirectResponse("/register", status_code=303)
+    if not re.search(r"[A-Za-z]", password) or not re.search(r"\d", password):
+        flash(request, "密码需要同时包含字母和数字", "error")
+        return RedirectResponse("/register", status_code=303)
+    if password != confirm:
+        flash(request, "两次输入的密码不一致", "error")
+        return RedirectResponse("/register", status_code=303)
+    existing = db.scalar(
+        select(User.id).where(or_(func.lower(User.username) == email, func.lower(User.email) == email))
+    )
+    if existing:
+        flash(request, "该邮箱已注册，请直接登录", "error")
+        return RedirectResponse("/register", status_code=303)
+    user = User(
+        username=email,
+        email=email,
+        display_name=display_name or email.rsplit("@", 1)[0],
+        password_hash=hash_password(password),
+        role="member",
+    )
+    db.add(user)
+    db.commit()
+    record_audit(db, request, None, "auth.register", details={"username": email})
+    flash(request, "注册成功，请用邮箱和密码登录")
+    return RedirectResponse("/admin", status_code=303)
+
+
 @app.get("/auth/oidc/login")
-async def oidc_login(request: Request):
-    if not settings.oidc_enabled or not oauth.oidc:
+async def oidc_login(request: Request, db: Session = Depends(get_db)):
+    if not oidc_enabled(db) or not oauth.oidc:
         raise HTTPException(status_code=404, detail="OIDC 未启用")
     redirect_uri = f"{settings.app_base_url}/auth/oidc/callback"
     next_path = str(request.query_params.get("next", "/"))
@@ -381,7 +462,7 @@ async def oidc_login(request: Request):
 
 @app.get("/auth/oidc/callback")
 async def oidc_callback(request: Request, db: Session = Depends(get_db)):
-    if not settings.oidc_enabled or not oauth.oidc:
+    if not oidc_enabled(db) or not oauth.oidc:
         raise HTTPException(status_code=404, detail="OIDC 未启用")
     state = str(request.query_params.get("state", ""))
     next_path = "/"
@@ -904,10 +985,23 @@ def integrations_page(request: Request, db: Session = Depends(get_db)):
         "integrations.html",
         context(request, user, page="integrations", values=values, field_values=field_values,
                 custom=custom, env_keys=env_keys, is_admin=is_admin, verify_mode_text=verify_mode_text, oidc={
-            "enabled": settings.oidc_enabled, "issuer": settings.oidc_issuer, "client_id": settings.oidc_client_id,
+            "enabled": oidc_enabled(db), "toggle": as_bool(get_value(db, OIDC_TOGGLE_KEY, "true" if settings.oidc_enabled else "false")),
+            "issuer": settings.oidc_issuer, "client_id": settings.oidc_client_id,
             "callback": f"{settings.app_base_url}/auth/oidc/callback",
         }),
     )
+
+
+@app.post("/integrations/oidc")
+async def integrations_oidc_toggle(request: Request, db: Session = Depends(get_db)):
+    user = require_page_admin(request, db)
+    form = await request.form()
+    validate_csrf(request, str(form.get("csrf_token", "")))
+    enabled = form.get("oidc_enabled") == "1"
+    set_value(db, OIDC_TOGGLE_KEY, "true" if enabled else "false")
+    record_audit(db, request, user, "integrations.update", "oidc", "", {"enabled": enabled})
+    flash(request, f"OIDC 登录已{'启用' if enabled else '关闭'}")
+    return RedirectResponse("/integrations", status_code=303)
 
 
 @app.post("/integrations")

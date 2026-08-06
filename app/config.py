@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     oidc_admin_group: str = ""
     oidc_group_claim: str = "groups"
 
+    # 邮箱 + 密码自助注册。部署方可在 .env 中关闭（false）后仅保留
+    # 管理员/邀请制账户。注册账户默认为普通成员，密码使用 Argon2 哈希。
+    registration_enabled: bool = True
+    registration_min_password_length: int = 10
+
     max_upload_mb: int = 25
     mail_scan_interval_minutes: int = 10
     mail_fetch_limit: int = 100

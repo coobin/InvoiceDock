@@ -77,6 +77,17 @@
 </form>
 <div class="integration-tests"><form action="/integrations/test/kingdee" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="button secondary">测试金蝶旗舰版连接</button></form><form action="/integrations/test/piaozone" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="button secondary">测试金蝶标准版连接</button></form><form action="/integrations/test/llm" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="button secondary">测试当前生效的 LLM 连接</button></form></div>
 {% if is_admin %}
-<section class="oidc-summary panel"><div><span class="integration-number">ID</span><div><span class="eyebrow">IDENTITY</span><h2>OIDC 登录</h2><p>OIDC 使用环境变量配置，避免客户端密钥进入数据库导出。</p></div><span class="status {{ 'verified' if oidc.enabled else 'muted' }}">{{ '已启用' if oidc.enabled else '未启用' }}</span></div><dl><div><dt>Issuer</dt><dd class="mono">{{ oidc.issuer or '—' }}</dd></div><div><dt>Client ID</dt><dd class="mono">{{ oidc.client_id or '—' }}</dd></div><div><dt>Callback URL</dt><dd class="mono">{{ oidc.callback }}</dd></div></dl></section>
+<section class="oidc-summary panel">
+  <div><span class="integration-number">ID</span><div><span class="eyebrow">IDENTITY</span><h2>OIDC 登录</h2><p>客户端参数由环境变量配置（避免密钥入库）；此开关控制登录入口与自动跳转是否生效。</p></div><span class="status {{ 'verified' if oidc.enabled else 'muted' }}">{{ '已启用' if oidc.enabled else '未启用' }}</span></div>
+  <dl>
+    <div><dt>Issuer</dt><dd class="mono">{{ oidc.issuer or '—' }}</dd></div>
+    <div><dt>Client ID</dt><dd class="mono">{{ oidc.client_id or '—' }}</dd></div>
+    <div><dt>Callback URL</dt><dd class="mono">{{ oidc.callback }}</dd></div>
+  </dl>
+  <form action="/integrations/oidc" method="post" class="oidc-toggle">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <label class="switch"><input type="checkbox" name="oidc_enabled" value="1" {{ 'checked' if oidc.toggle else '' }} onchange="this.form.submit()"><span></span><b>允许 OIDC 登录</b></label>
+  </form>
+</section>
 {% endif %}
 {% endblock %}
