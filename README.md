@@ -95,7 +95,7 @@ OIDC_GROUP_CLAIM=groups
 
 ```dotenv
 REGISTRATION_ENABLED=false
-REGISTRATION_MIN_PASSWORD_LENGTH=10
+REGISTRATION_MIN_PASSWORD_LENGTH=8
 ```
 
 注册与登录的安全基线：邮箱全局唯一（大小写不敏感）、密码强度策略（最短长度 + 字母 + 数字）、Argon2 哈希存储、按 IP 的登录/注册限流、全表单 CSRF 校验、注册与登录写入审计日志。注册后的邮箱作为登录标识，暂不要求邮件验证（系统默认不发送外发邮件）；如需邮箱验证，可后续接入 SMTP 后补充验证码流程。

@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     # 邮箱 + 密码自助注册。部署方可在 .env 中关闭（false）后仅保留
     # 管理员/邀请制账户。注册账户默认为普通成员，密码使用 Argon2 哈希。
     registration_enabled: bool = True
-    registration_min_password_length: int = 10
+    registration_min_password_length: int = 8
 
     max_upload_mb: int = 25
     mail_scan_interval_minutes: int = 10
