@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     tz: str = "Asia/Shanghai"
     log_level: str = "INFO"
 
-    # Optional integration overrides (金蝶 / LLM). When a value is set here
+    # Optional integration overrides (税务 / LLM). When a value is set here
     # (via environment or .env), it takes precedence over database-stored
     # settings and is never persisted to the database.
     kingdee_enabled: str = ""
@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     verify_ocr: str = "true"
     verify_llm: str = "true"
 
-    # 金蝶发票云 · 标准版（Piaozone）override。使用 client_id/client_secret
+    # 税务发票云 · 标准版（Piaozone）override。使用 client_id/client_secret
     # 签名授权（/base/oauth/token），识别查验走 /m3/bill/invoice/img/Check/info。
     piaozone_enabled: str = ""
     piaozone_base_url: str = "https://api.piaozone.com"

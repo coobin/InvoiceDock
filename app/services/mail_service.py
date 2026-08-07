@@ -201,7 +201,7 @@ def _discard_not_cloud_verified(db: Session, invoice) -> None:
         db,
         invoice,
         "email.discard_unverified",
-        f"{invoice.original_name} 金蝶发票云未能校验为有效发票，已自动过滤",
+        f"{invoice.original_name} 税务发票云未能校验为有效发票，已自动过滤",
     )
 
 

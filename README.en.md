@@ -1,6 +1,6 @@
 # InvoiceDock · 票舱
 
-A self-hosted web workspace for collecting Chinese invoices from IMAP mailboxes or manual uploads, prioritizing Kingdee Invoice Cloud verification, falling back to local OCR/document text plus an OpenAI-compatible LLM for dual-source consistency checks, and producing A4 print sheets and Excel ledgers.
+A self-hosted web workspace for collecting Chinese invoices from IMAP mailboxes or manual uploads, prioritizing Tax Invoice Cloud verification, falling back to local OCR/document text plus an OpenAI-compatible LLM for dual-source consistency checks, and producing A4 print sheets and Excel ledgers.
 
 The application clearly distinguishes provider-backed verification from OCR/LLM agreement. Model agreement reduces data-entry errors; it is not proof of tax authenticity.
 
@@ -8,7 +8,7 @@ The application clearly distinguishes provider-backed verification from OCR/LLM 
 
 - Multiple IMAP mailboxes, scheduled read-only scans, supported attachments, bounded ZIP extraction, and safe direct-download links.
 - PDF/XML/OFD/image ingestion with SHA-256 file deduplication.
-- Kingdee app/access token flow and `recognitionCheck` integration.
+- Tax app/access token flow and `recognitionCheck` integration.
 - Local PDF text extraction, XML/OFD parsing, Tesseract OCR, and configurable OpenAI-compatible models.
 - Field-by-field evidence comparison, manual review, business-key duplicate alerts, and audit logs.
 - Searchable invoice ledger, previews, Excel export, and A4 1/2/4-up PDF generation.

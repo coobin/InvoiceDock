@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}查验集成 · {{ app_name }}{% endblock %}
 {% block content %}
-<header class="page-head"><div><span class="eyebrow">VERIFICATION ROUTES / 查验集成</span><h1>定义发票的证据路径</h1><p>优先级固定为金蝶发票云 → OCR + LLM → 人工复核，避免把模型推断冒充官方验真。</p></div></header>
+<header class="page-head"><div><span class="eyebrow">VERIFICATION ROUTES / 查验集成</span><h1>定义发票的证据路径</h1><p>优先级固定为税务发票云 → OCR + LLM → 人工复核，避免把模型推断冒充官方验真。</p></div></header>
 {% if not is_admin %}
 <div class="notice subtle"><b>个人配置</b><p>未开启“自定义配置”时，使用管理员统一配置；开启后请填写你自己的凭据。凭据加密保存，仅你自己可见。</p></div>
 {% endif %}
@@ -17,7 +17,7 @@
   <section class="integration-card verify-methods-card">
     <div class="integration-head"><div class="integration-number">00</div><div><span class="eyebrow">VERIFICATION METHODS</span><h2>允许使用的查验方式</h2><p>关闭“本地 OCR / LLM”回退后，发票云查验失败的发票直接进入人工复核，不再调用本地识别。</p></div></div>
     <div class="form-grid three">
-      <label class="toggle-row"><input type="checkbox" name="verify_provider" {{ 'checked' if values.verify_provider == 'true' else '' }}><span></span><div><strong>发票云查验</strong><small>金蝶标准版 / 旗舰版</small></div></label>
+      <label class="toggle-row"><input type="checkbox" name="verify_provider" {{ 'checked' if values.verify_provider == 'true' else '' }}><span></span><div><strong>发票云查验</strong><small>税务标准版 / 旗舰版</small></div></label>
       <label class="toggle-row"><input type="checkbox" name="verify_ocr" {{ 'checked' if values.verify_ocr == 'true' else '' }}><span></span><div><strong>本地 OCR 回退</strong><small>PDF 文本层 / Tesseract</small></div></label>
       <label class="toggle-row"><input type="checkbox" name="verify_llm" {{ 'checked' if values.verify_llm == 'true' else '' }}><span></span><div><strong>LLM 双源复核</strong><small>需同时启用 LLM 集成</small></div></label>
     </div>
@@ -26,11 +26,11 @@
   <div class="notice subtle"><b>查验方式</b><p>当前允许：{{ verify_mode_text }}。此项由管理员统一配置。</p></div>
   {% endif %}
   <section class="integration-card kingdee-card">
-    <div class="integration-head"><div class="integration-number">01</div><div><span class="eyebrow">PRIMARY</span><h2>金蝶发票云 · 识别查验</h2><p>调用旗舰版 <span class="mono">recognitionCheck</span>；凭据完整且启用时优先使用。</p></div>
+    <div class="integration-head"><div class="integration-number">01</div><div><span class="eyebrow">PRIMARY</span><h2>税务发票云 · 识别查验</h2><p>调用旗舰版 <span class="mono">recognitionCheck</span>；凭据完整且启用时优先使用。</p></div>
       {% if not is_admin %}<label class="switch"><input type="checkbox" name="kingdee_custom" value="1" {{ 'checked' if kd_custom else '' }} data-settings-toggle="kingdee-settings"><span></span><b>自定义配置</b></label>{% else %}<label class="switch"><input type="checkbox" name="kingdee_enabled" {{ 'checked' if values.kingdee_enabled == 'true' else '' }} data-settings-toggle="kingdee-settings"><span></span><b>启用</b></label>{% endif %}
     </div>
     <div class="form-grid three" id="kingdee-settings">
-      {% if not is_admin %}<label class="toggle-row compact span-2"><input type="checkbox" name="kingdee_enabled" {{ 'checked' if field_values.kingdee_enabled == 'true' else '' }} {{ 'disabled' if not kd_custom else '' }}><span></span><div><strong>启用金蝶查验</strong><small>关闭后该集成对你个人不生效</small></div></label>{% endif %}
+      {% if not is_admin %}<label class="toggle-row compact span-2"><input type="checkbox" name="kingdee_enabled" {{ 'checked' if field_values.kingdee_enabled == 'true' else '' }} {{ 'disabled' if not kd_custom else '' }}><span></span><div><strong>启用税务查验</strong><small>关闭后该集成对你个人不生效</small></div></label>{% endif %}
       <label class="span-2">环境地址<input type="url" name="kingdee_base_url" value="{{ field_values.kingdee_base_url }}" placeholder="https://your-tenant.piaozone.com/path" {{ 'disabled' if not is_admin and not kd_custom else '' }}></label>
       <label>租户 ID<input name="kingdee_tenant_id" value="{{ field_values.kingdee_tenant_id or '1' }}" {{ 'disabled' if not is_admin and not kd_custom else '' }}></label>
       <label>App ID<input name="kingdee_app_id" value="{{ field_values.kingdee_app_id }}" {{ 'disabled' if not is_admin and not kd_custom else '' }}></label>
@@ -41,14 +41,14 @@
       <label>企业税号<input name="kingdee_tax_no" value="{{ field_values.kingdee_tax_no }}" {{ 'disabled' if not is_admin and not kd_custom else '' }}></label>
       <label class="span-2">企业名称<input name="kingdee_company_name" value="{{ field_values.kingdee_company_name }}" {{ 'disabled' if not is_admin and not kd_custom else '' }}></label>
     </div>
-    {% if not is_admin %}<div class="privacy-band"><b>{{ '使用我的配置' if kd_custom else '使用管理员配置' }}</b><p>{{ '凭据已加密保存，仅你自己可见。' if kd_custom else '未自定义时，你的发票使用管理员配置的金蝶凭据。' }}</p></div>{% endif %}
+    {% if not is_admin %}<div class="privacy-band"><b>{{ '使用我的配置' if kd_custom else '使用管理员配置' }}</b><p>{{ '凭据已加密保存，仅你自己可见。' if kd_custom else '未自定义时，你的发票使用管理员配置的税务凭据。' }}</p></div>{% endif %}
   </section>
   <section class="integration-card piaozone-card">
-    <div class="integration-head"><div class="integration-number">02</div><div><span class="eyebrow">KINGDEE STANDARD</span><h2>金蝶发票云 · 标准版（Piaozone）</h2><p>client_id / client_secret 签名授权，调用 <span class="mono">img/Check/info</span> 识别查验；配置完整时优先于旗舰版。</p></div>
+    <div class="integration-head"><div class="integration-number">02</div><div><span class="eyebrow">TAX STANDARD</span><h2>税务发票云 · 标准版（Piaozone）</h2><p>client_id / client_secret 签名授权，调用 <span class="mono">img/Check/info</span> 识别查验；配置完整时优先于旗舰版。</p></div>
       {% if not is_admin %}<label class="switch"><input type="checkbox" name="piaozone_custom" value="1" {{ 'checked' if pz_custom else '' }} data-settings-toggle="piaozone-settings"><span></span><b>自定义配置</b></label>{% else %}<label class="switch"><input type="checkbox" name="piaozone_enabled" {{ 'checked' if values.piaozone_enabled == 'true' else '' }} data-settings-toggle="piaozone-settings"><span></span><b>启用</b></label>{% endif %}
     </div>
     <div class="form-grid three" id="piaozone-settings">
-      {% if not is_admin %}<label class="toggle-row compact span-2"><input type="checkbox" name="piaozone_enabled" {{ 'checked' if field_values.piaozone_enabled == 'true' else '' }} {{ 'disabled' if not pz_custom else '' }}><span></span><div><strong>启用金蝶标准版查验</strong><small>关闭后该集成对你个人不生效</small></div></label>{% endif %}
+      {% if not is_admin %}<label class="toggle-row compact span-2"><input type="checkbox" name="piaozone_enabled" {{ 'checked' if field_values.piaozone_enabled == 'true' else '' }} {{ 'disabled' if not pz_custom else '' }}><span></span><div><strong>启用税务标准版查验</strong><small>关闭后该集成对你个人不生效</small></div></label>{% endif %}
       <label class="span-2">环境地址<input type="url" name="piaozone_base_url" value="{{ field_values.piaozone_base_url }}" placeholder="https://api.piaozone.com" {{ 'disabled' if not is_admin and not pz_custom else '' }}></label>
       <label>Client ID<input name="piaozone_client_id" value="{{ field_values.piaozone_client_id }}" {{ 'disabled' if not is_admin and not pz_custom else '' }}></label>
       <label>Client Secret<input type="password" name="piaozone_client_secret" value="{{ field_values.piaozone_client_secret }}" autocomplete="new-password" placeholder="{{ '由环境变量提供' if 'piaozone_client_secret' in env_keys else '' }}" {{ 'disabled' if not is_admin and not pz_custom else '' }}></label>
@@ -57,7 +57,7 @@
       <label>Token 路径<input name="piaozone_token_path" value="{{ field_values.piaozone_token_path }}" {{ 'disabled' if not is_admin and not pz_custom else '' }}></label>
       <label class="span-2">识别查验路径<input name="piaozone_invoice_check_path" value="{{ field_values.piaozone_invoice_check_path }}" {{ 'disabled' if not is_admin and not pz_custom else '' }}></label>
     </div>
-    {% if not is_admin %}<div class="privacy-band"><b>{{ '使用我的配置' if pz_custom else '使用管理员配置' }}</b><p>{{ '凭据已加密保存，仅你自己可见。' if pz_custom else '未自定义时，你的发票使用管理员配置的金蝶标准版凭据。' }}</p></div>{% endif %}
+    {% if not is_admin %}<div class="privacy-band"><b>{{ '使用我的配置' if pz_custom else '使用管理员配置' }}</b><p>{{ '凭据已加密保存，仅你自己可见。' if pz_custom else '未自定义时，你的发票使用管理员配置的税务标准版凭据。' }}</p></div>{% endif %}
   </section>
   <section class="integration-card llm-card">
     <div class="integration-head"><div class="integration-number">03</div><div><span class="eyebrow">FALLBACK</span><h2>OCR + LLM 双源一致性</h2><p>本地 Tesseract/文本层与 OpenAI 兼容接口独立提取；只对共同字段做比对。</p></div>
@@ -75,7 +75,7 @@
   </section>
   <button class="button primary save-integrations" type="submit">{{ '保存并加密配置' if is_admin else '保存我的配置' }}</button>
 </form>
-<div class="integration-tests"><form action="/integrations/test/kingdee" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="button secondary">测试金蝶旗舰版连接</button></form><form action="/integrations/test/piaozone" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="button secondary">测试金蝶标准版连接</button></form><form action="/integrations/test/llm" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="button secondary">测试当前生效的 LLM 连接</button></form></div>
+<div class="integration-tests"><form action="/integrations/test/kingdee" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="button secondary">测试税务旗舰版连接</button></form><form action="/integrations/test/piaozone" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="button secondary">测试税务标准版连接</button></form><form action="/integrations/test/llm" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="button secondary">测试当前生效的 LLM 连接</button></form></div>
 {% if is_admin %}
 <section class="oidc-summary panel">
   <div><span class="integration-number">ID</span><div><span class="eyebrow">IDENTITY</span><h2>OIDC 登录</h2><p>客户端参数由环境变量配置（避免密钥入库）；此开关控制登录入口与自动跳转是否生效。</p></div><span class="status {{ 'verified' if oidc.enabled else 'muted' }}">{{ '已启用' if oidc.enabled else '未启用' }}</span></div>

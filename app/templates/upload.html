@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}导入发票 · {{ app_name }}{% endblock %}
 {% block content %}
-<header class="page-head"><div><span class="eyebrow">MANUAL INTAKE / 手动收票</span><h1>把散落的发票送进流水线</h1><p>上传后自动优先尝试金蝶查验；不可用时进入 OCR + LLM 双源复核。</p></div></header>
+<header class="page-head"><div><span class="eyebrow">MANUAL INTAKE / 手动收票</span><h1>把散落的发票送进流水线</h1><p>上传后自动优先尝试税务查验；不可用时进入 OCR + LLM 双源复核。</p></div></header>
 <div class="upload-layout">
   <section class="upload-card">
     <form action="/upload" method="post" enctype="multipart/form-data" data-upload-form>
@@ -20,7 +20,7 @@
     <div class="guide-title"><span>处理次序</span><b>自动</b></div>
     <ol>
       <li><b>01</b><div><strong>文件安全检查</strong><p>限制格式、体积和压缩包展开大小，并按 SHA-256 去除完全相同的文件。</p></div></li>
-      <li><b>02</b><div><strong>金蝶识别查验</strong><p>配置凭据后优先调用发票云；成功结果带“税务已查验”印章。</p></div></li>
+      <li><b>02</b><div><strong>税务识别查验</strong><p>配置凭据后优先调用发票云；成功结果带“税务已查验”印章。</p></div></li>
       <li><b>03</b><div><strong>双源一致性</strong><p>回退到本地 OCR/文本层与 LLM 独立提取，冲突字段留给人工选择。</p></div></li>
       <li><b>04</b><div><strong>去重与归档</strong><p>用票号、代码、日期与金额提示业务重复，原始文件不被改写。</p></div></li>
     </ol>

@@ -18,7 +18,7 @@ flowchart LR
     I --> F[(原始文件)]
     I --> D[(SQLite WAL)]
     I --> P{处理路由}
-    P -->|已配置| K[金蝶 recognitionCheck]
+    P -->|已配置| K[税务 recognitionCheck]
     K -->|成功| V[已查验]
     K -->|失败/未配置| O[文本层 / XML / OFD / OCR]
     O --> L[OpenAI 兼容 LLM]
@@ -43,7 +43,7 @@ flowchart LR
 ## 数据模型
 
 - `users`：本地/OIDC 身份和角色。
-- `invoices`：文件指纹、来源、状态、规范化字段、OCR/LLM/金蝶原始结果、冲突和重复关系。
+- `invoices`：文件指纹、来源、状态、规范化字段、OCR/LLM/税务原始结果、冲突和重复关系。
 - `mailboxes`：IMAP 参数、加密授权码、UID 游标和最近错误。
 - `processed_emails`：`mailbox_id + uid` 唯一，保证同一邮件不重复消费。
 - `app_settings`：集成配置；密钥字段使用 Fernet 加密。
@@ -55,7 +55,7 @@ flowchart LR
 | 状态 | 含义 |
 | --- | --- |
 | `pending` / `processing` | 已入库或正在处理 |
-| `verified` | 金蝶识别查验接口成功返回 |
+| `verified` | 税务识别查验接口成功返回 |
 | `consistent` | OCR 与 LLM 至少三个共同字段、关键字段无冲突且一致率不低于 75% |
 | `review` | 未配置 LLM、证据不足、关键字段冲突或回退失败 |
 | `reviewed` | 用户人工确认并保存 |
@@ -72,7 +72,7 @@ flowchart LR
 - 邮件链接每次请求和重定向前解析 DNS，阻止私网、回环、链路本地、保留和多播地址，限制响应体大小。
 - 原文件放在认证路由之后，不把上传目录作为静态目录暴露。
 
-## 金蝶路由
+## 税务路由
 
 1. `POST {baseUrl}/api/getAppToken.do`
 2. `POST {baseUrl}/api/login.do`，access token 有效期约两小时并在进程内缓存。

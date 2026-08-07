@@ -143,7 +143,7 @@ def get_kingdee_access_token(config: dict[str, str], force: bool = False) -> str
         app_data = app_payload.get("data", {})
         app_token = app_data.get("app_token")
         if not app_token or not _truthy(app_data.get("success", app_payload.get("status"))):
-            raise IntegrationError(app_data.get("error_desc") or "金蝶 app_token 获取失败")
+            raise IntegrationError(app_data.get("error_desc") or "税务 app_token 获取失败")
         login_response = client.post(
             f"{base_url}/api/login.do",
             json={"user": config["kingdee_user"], "apptoken": app_token, "accountId": config["kingdee_account_id"]},
@@ -153,7 +153,7 @@ def get_kingdee_access_token(config: dict[str, str], force: bool = False) -> str
         login_data = login_payload.get("data", {})
         access_token = login_data.get("access_token")
         if not access_token or not _truthy(login_data.get("success", login_payload.get("status"))):
-            raise IntegrationError(login_data.get("error_desc") or "金蝶 access_token 获取失败")
+            raise IntegrationError(login_data.get("error_desc") or "税务 access_token 获取失败")
     expires_ms = login_data.get("expire_time")
     expires = float(expires_ms) / 1000 if expires_ms else time.time() + 7000
     _kingdee_token.update(value=access_token, expires=expires, fingerprint=fingerprint)
@@ -194,13 +194,13 @@ def verify_with_kingdee(path: Path, config: dict[str, str]) -> tuple[dict[str, A
         response.raise_for_status()
         raw = response.json()
     if not _truthy(raw.get("success")):
-        raise IntegrationError(str(raw.get("message") or raw.get("errorCode") or "金蝶识别查验失败"))
+        raise IntegrationError(str(raw.get("message") or raw.get("errorCode") or "税务识别查验失败"))
     invoice_data = _unwrap_invoice(raw.get("data"))
     if not invoice_data:
-        raise IntegrationError("金蝶返回成功但未包含可识别的发票字段")
+        raise IntegrationError("税务返回成功但未包含可识别的发票字段")
     fields = map_external_fields(invoice_data)
     if not _provider_fields_valid(fields):
-        raise IntegrationError("金蝶旗舰版未识别到有效发票字段（缺少发票号码、金额或购销方）")
+        raise IntegrationError("税务旗舰版未识别到有效发票字段（缺少发票号码、金额或购销方）")
     return fields, raw
 
 
@@ -284,7 +284,7 @@ def get_piaozone_access_token(config: dict[str, str], force: bool = False) -> st
                     token = str(raw["data"][key])
                     break
         if not token:
-            raise IntegrationError(str(raw.get("message") or raw.get("error") or "金蝶标准版 access_token 获取失败"))
+            raise IntegrationError(str(raw.get("message") or raw.get("error") or "税务标准版 access_token 获取失败"))
     _piaozone_token.update(value=token, expires=time.time() + 7000, fingerprint=fingerprint)
     return token
 
@@ -333,7 +333,7 @@ def verify_with_piaozone(path: Path, config: dict[str, str]) -> tuple[dict[str, 
         raw = response.json()
     payload = _piaozone_nested(raw)
     if not payload:
-        raise IntegrationError("金蝶标准版返回成功但未包含可识别的发票字段")
+        raise IntegrationError("税务标准版返回成功但未包含可识别的发票字段")
     fields = {
         "invoice_type": str(_pick(payload, "invoiceTypeName", "invoiceType", "type")),
         "invoice_code": str(_pick(payload, "invoiceCode", "code", "fpdm")),
@@ -350,7 +350,7 @@ def verify_with_piaozone(path: Path, config: dict[str, str]) -> tuple[dict[str, 
         "category": "未分类",
     }
     if not _provider_fields_valid(fields):
-        raise IntegrationError("金蝶标准版未识别到有效发票字段（缺少发票号码、金额或购销方）")
+        raise IntegrationError("税务标准版未识别到有效发票字段（缺少发票号码、金额或购销方）")
     return fields, raw
 
 
@@ -546,7 +546,7 @@ def process_invoice(invoice_id: str) -> None:
             early_extraction = None
             if providers_ready:
                 # 先本地识别发票号并查当天缓存：若该发票号今天已通过发票云查验，
-                # 直接复用结果，不再调用金蝶发票云（避免重复消耗单票每日查验次数）。
+                # 直接复用结果，不再调用税务发票云（避免重复消耗单票每日查验次数）。
                 candidate = (invoice.invoice_number or "").strip()
                 if not candidate:
                     try:
@@ -563,7 +563,7 @@ def process_invoice(invoice_id: str) -> None:
                         JobLog(
                             level="info",
                             event="verify.cache_hit",
-                            message=f"{invoice.original_name} 发票号当天已查验，直接复用本地结果，未调用金蝶发票云",
+                            message=f"{invoice.original_name} 发票号当天已查验，直接复用本地结果，未调用税务发票云",
                             details={
                                 "invoice_id": invoice.id,
                                 "invoice_number": cache.invoice_number,
@@ -654,7 +654,7 @@ def process_invoice(invoice_id: str) -> None:
                         invoice.error_message = "LLM 未配置且已禁用本地 OCR，请人工处理"
                 if provider_error:
                     fallback_label = invoice.verification_method.upper() if invoice.verification_method else "人工复核"
-                    invoice.error_message = f"金蝶查验未完成：{provider_error}；已回退到 {fallback_label}"
+                    invoice.error_message = f"税务查验未完成：{provider_error}；已回退到 {fallback_label}"
 
             if invoice.category in ("", "未分类"):
                 invoice.category = categorize(
@@ -684,14 +684,14 @@ def process_invoice(invoice_id: str) -> None:
 
 def test_kingdee(config: dict[str, str]) -> str:
     if not _kingdee_complete(config):
-        raise IntegrationError("请先启用并填写完整的金蝶连接信息")
+        raise IntegrationError("请先启用并填写完整的税务连接信息")
     token = get_kingdee_access_token(config, force=True)
     return f"连接成功，access_token 已获取（…{token[-8:]}）"
 
 
 def test_piaozone(config: dict[str, str]) -> str:
     if not _piaozone_complete(config):
-        raise IntegrationError("请先启用并填写完整的金蝶标准版（Piaozone）连接信息")
+        raise IntegrationError("请先启用并填写完整的税务标准版（Piaozone）连接信息")
     token = get_piaozone_access_token(config, force=True)
     return f"连接成功，access_token 已获取（…{token[-8:]}）"
 

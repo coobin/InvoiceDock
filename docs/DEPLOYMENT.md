@@ -78,7 +78,7 @@ docker inspect --format '{{json .State.Health}}' invoicedock-web-1
 ```
 
 - 邮箱问题：先在网页测试连接，确认授权码、IMAP 已启用、文件夹名和服务器时间。
-- 金蝶问题：确认环境地址包含租户路径，凭据来自同一环境，服务器能访问该 HTTPS 地址。
+- 税务问题：确认环境地址包含租户路径，凭据来自同一环境，服务器能访问该 HTTPS 地址。
 - LLM 问题：Base URL 应包含兼容 API 的版本前缀（常见为 `/v1`），模型需支持 JSON；若不支持视觉输入，关闭“发送票面预览”。
 - 文件识别问题：PDF 若已有文本层会优先提取；扫描 PDF 才调用 Tesseract。
 
