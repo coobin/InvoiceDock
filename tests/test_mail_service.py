@@ -1,7 +1,14 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+
+from app.db import Base
+from app.models import Invoice
 from app.services import mail_service
 
 
@@ -65,3 +72,102 @@ def test_discard_not_cloud_verified_removes_record_and_files(tmp_path, monkeypat
     assert db.deleted == [invoice]
     assert not (uploads / "z.pdf").exists()
     assert not (previews / "3.jpg").exists()
+
+
+@pytest.fixture()
+def session_factory(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'dedupe.db'}")
+    Base.metadata.create_all(engine)
+    return sessionmaker(bind=engine, class_=Session, expire_on_commit=False)
+
+
+def _setup_dirs(tmp_path):
+    uploads = tmp_path / "uploads"
+    previews = tmp_path / "previews"
+    uploads.mkdir()
+    previews.mkdir()
+    return uploads, previews
+
+
+def _invoice(stored_name, mime_type, digest, **extra):
+    return Invoice(
+        original_name=stored_name,
+        stored_name=stored_name,
+        mime_type=mime_type,
+        file_size=1,
+        sha256=digest,
+        **extra,
+    )
+
+
+def test_non_pdf_duplicate_is_discarded(session_factory, tmp_path, monkeypatch) -> None:
+    uploads, previews = _setup_dirs(tmp_path)
+    monkeypatch.setattr(
+        mail_service, "get_settings", lambda: SimpleNamespace(upload_dir=uploads, preview_dir=previews)
+    )
+    with session_factory() as db:
+        original = _invoice("a.jpg", "image/jpeg", "1" * 64, status="verified")
+        db.add(original)
+        db.commit()
+        duplicate = _invoice("a-copy.jpg", "image/jpeg", "2" * 64, status="duplicate", duplicate_of=original.id)
+        db.add(duplicate)
+        db.commit()
+        (uploads / "a-copy.jpg").write_bytes(b"x")
+        assert mail_service._dedupe_keep_pdf(db, duplicate) is False
+        db.expire_all()
+        assert db.get(Invoice, duplicate.id) is None
+        assert db.get(Invoice, original.id) is not None
+        assert not (uploads / "a-copy.jpg").exists()
+
+
+def test_pdf_duplicate_replaces_non_pdf_original(session_factory, tmp_path, monkeypatch) -> None:
+    uploads, previews = _setup_dirs(tmp_path)
+    monkeypatch.setattr(
+        mail_service, "get_settings", lambda: SimpleNamespace(upload_dir=uploads, preview_dir=previews)
+    )
+    with session_factory() as db:
+        original = _invoice("a.jpg", "image/jpeg", "1" * 64, status="verified")
+        db.add(original)
+        db.commit()
+        (uploads / "a.jpg").write_bytes(b"jpeg")
+        (previews / f"{original.id}.jpg").write_bytes(b"preview")
+        duplicate = _invoice(
+            "a.pdf",
+            "application/pdf",
+            "2" * 64,
+            status="duplicate",
+            duplicate_of=original.id,
+            verified_at=datetime.now(UTC).replace(tzinfo=None),
+        )
+        db.add(duplicate)
+        db.commit()
+        (uploads / "a.pdf").write_bytes(b"%PDF")
+        assert mail_service._dedupe_keep_pdf(db, duplicate) is True
+        db.expire_all()
+        assert db.get(Invoice, original.id) is None
+        kept = db.get(Invoice, duplicate.id)
+        assert kept is not None
+        assert kept.duplicate_of is None
+        assert kept.status == "verified"
+        assert not (uploads / "a.jpg").exists()
+        assert not (previews / f"{original.id}.jpg").exists()
+
+
+def test_pdf_duplicate_when_original_is_pdf_is_discarded(session_factory, tmp_path, monkeypatch) -> None:
+    uploads, previews = _setup_dirs(tmp_path)
+    monkeypatch.setattr(
+        mail_service, "get_settings", lambda: SimpleNamespace(upload_dir=uploads, preview_dir=previews)
+    )
+    with session_factory() as db:
+        original = _invoice("a.pdf", "application/pdf", "1" * 64, status="verified")
+        db.add(original)
+        db.commit()
+        duplicate = _invoice("a-again.pdf", "application/pdf", "2" * 64, status="duplicate", duplicate_of=original.id)
+        db.add(duplicate)
+        db.commit()
+        (uploads / "a-again.pdf").write_bytes(b"%PDF")
+        assert mail_service._dedupe_keep_pdf(db, duplicate) is False
+        db.expire_all()
+        assert db.get(Invoice, duplicate.id) is None
+        assert db.get(Invoice, original.id) is not None
+        assert not (uploads / "a-again.pdf").exists()

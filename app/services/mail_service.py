@@ -205,6 +205,47 @@ def _discard_not_cloud_verified(db: Session, invoice) -> None:
     )
 
 
+def _dedupe_keep_pdf(db: Session, invoice) -> bool:
+    """Duplicate email imports are collapsed to a single PDF record.
+
+    - non-PDF duplicates are discarded;
+    - a PDF duplicate replaces an existing non-PDF record so only the PDF
+      remains in the ledger (the old record and its files are removed);
+    - when the existing record is already a PDF, the extra copy is discarded.
+
+    Returns True when the incoming record should remain in the ledger.
+    """
+    original = db.get(Invoice, invoice.duplicate_of) if invoice.duplicate_of else None
+    if invoice.mime_type == "application/pdf":
+        if original and original.mime_type != "application/pdf":
+            _remove_email_invoice(
+                db,
+                original,
+                "email.dedupe_keep_pdf",
+                f"{original.original_name} 已由 PDF 版本 {invoice.original_name} 替代，仅保留 PDF",
+            )
+            invoice.duplicate_of = None
+            invoice.status = "verified" if invoice.verified_at else "review"
+            db.commit()
+            return True
+        if original:
+            _remove_email_invoice(
+                db,
+                invoice,
+                "email.discard_duplicate",
+                f"{invoice.original_name} 已有同名 PDF，重复副本已丢弃",
+            )
+            return False
+        return True
+    _remove_email_invoice(
+        db,
+        invoice,
+        "email.discard_duplicate",
+        f"{invoice.original_name} 与已有发票重复且非 PDF，已丢弃",
+    )
+    return False
+
+
 def sync_mailbox(db: Session, mailbox: Mailbox) -> dict[str, int]:
     client = _connect(mailbox)
     imported = 0
@@ -251,7 +292,10 @@ def sync_mailbox(db: Session, mailbox: Mailbox) -> dict[str, int]:
                         fresh = db.get(Invoice, invoice.id)
                         if fresh and _discard_non_invoice(db, fresh):
                             continue
-                        if fresh and provider_ready and fresh.status not in {"verified", "duplicate"}:
+                        if fresh and fresh.status == "duplicate":
+                            if not _dedupe_keep_pdf(db, fresh):
+                                continue
+                        elif fresh and provider_ready and fresh.status not in {"verified", "duplicate"}:
                             _discard_not_cloud_verified(db, fresh)
                             continue
                         current_imported += 1
@@ -278,7 +322,10 @@ def sync_mailbox(db: Session, mailbox: Mailbox) -> dict[str, int]:
                             fresh = db.get(Invoice, invoice.id)
                             if fresh and _discard_non_invoice(db, fresh):
                                 continue
-                            if fresh and provider_ready and fresh.status not in {"verified", "duplicate"}:
+                            if fresh and fresh.status == "duplicate":
+                                if not _dedupe_keep_pdf(db, fresh):
+                                    continue
+                            elif fresh and provider_ready and fresh.status not in {"verified", "duplicate"}:
                                 _discard_not_cloud_verified(db, fresh)
                                 continue
                             current_imported += 1
