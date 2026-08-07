@@ -5,6 +5,7 @@ from app.services.verifier import (
     compare_sources,
     has_invoice_identity,
     map_external_fields,
+    provider_configured,
 )
 
 
@@ -55,6 +56,31 @@ def test_has_invoice_identity():
     assert has_invoice_identity(SimpleNamespace(invoice_number="", total_amount=0.0, seller_name="", buyer_name="")) is True
     assert has_invoice_identity(SimpleNamespace(invoice_number="", total_amount=None, seller_name="A", buyer_name="")) is True
     assert has_invoice_identity(SimpleNamespace(invoice_number="", total_amount=None, seller_name="", buyer_name="")) is False
+
+
+def test_provider_configured_requires_complete_enabled_provider():
+    piaozone = {
+        "verify_provider": "true",
+        "piaozone_enabled": "true",
+        "piaozone_base_url": "https://api.example.com",
+        "piaozone_client_id": "cid",
+        "piaozone_client_secret": "secret",
+    }
+    assert provider_configured(piaozone) is True
+    assert provider_configured({**piaozone, "piaozone_client_secret": ""}) is False
+    assert provider_configured({**piaozone, "verify_provider": "false"}) is False
+    kingdee = {
+        "verify_provider": "true",
+        "kingdee_enabled": "true",
+        "kingdee_base_url": "https://king.example.com",
+        "kingdee_app_id": "aid",
+        "kingdee_app_secret": "asecret",
+        "kingdee_account_id": "acct",
+        "kingdee_user": "user",
+    }
+    assert provider_configured(kingdee) is True
+    assert provider_configured({**kingdee, "kingdee_user": ""}) is False
+    assert provider_configured({"verify_provider": "true", "piaozone_enabled": "false"}) is False
 
 
 def test_kingdee_alias_mapping():

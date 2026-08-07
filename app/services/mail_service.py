@@ -21,7 +21,8 @@ from app.db import SessionLocal
 from app.models import Invoice, JobLog, Mailbox, ProcessedEmail, utcnow
 from app.security import decrypt_secret
 from app.services.ingestion import ALLOWED_EXTENSIONS, extract_zip_candidates, ingest_bytes
-from app.services.verifier import has_invoice_identity, process_invoice
+from app.services.settings_service import get_integrations
+from app.services.verifier import has_invoice_identity, process_invoice, provider_configured
 
 logger = logging.getLogger(__name__)
 URL_RE = re.compile(r"https?://[^\s<>\"']+", re.I)
@@ -168,28 +169,40 @@ def _attachment_candidates(message: Message) -> list[tuple[str, bytes]]:
     return candidates
 
 
+def _remove_email_invoice(db: Session, invoice, event: str, message: str) -> None:
+    """Delete an email-imported invoice record plus its local files."""
+    settings = get_settings()
+    original = settings.upload_dir / invoice.stored_name
+    preview = settings.preview_dir / f"{invoice.id}.jpg"
+    db.add(JobLog(level="warning", event=event, message=message, details={"invoice_id": invoice.id}))
+    db.delete(invoice)
+    db.commit()
+    original.unlink(missing_ok=True)
+    preview.unlink(missing_ok=True)
+
+
 def _discard_non_invoice(db: Session, invoice) -> bool:
     """Email attachments that contain no invoice identity are discarded
     entirely (record + local files) so unrelated documents never enter the
     ledger. Returns True when the invoice was discarded."""
     if has_invoice_identity(invoice):
         return False
-    settings = get_settings()
-    original = settings.upload_dir / invoice.stored_name
-    preview = settings.preview_dir / f"{invoice.id}.jpg"
-    db.add(
-        JobLog(
-            level="warning",
-            event="email.discard_non_invoice",
-            message=f"{invoice.original_name} 未识别到发票要素，已自动丢弃",
-            details={"invoice_id": invoice.id},
-        )
+    _remove_email_invoice(
+        db, invoice, "email.discard_non_invoice", f"{invoice.original_name} 未识别到发票要素，已自动丢弃"
     )
-    db.delete(invoice)
-    db.commit()
-    original.unlink(missing_ok=True)
-    preview.unlink(missing_ok=True)
     return True
+
+
+def _discard_not_cloud_verified(db: Session, invoice) -> None:
+    """When 发票云 is configured, email-imported documents must pass cloud
+    verification; receipts, quotes and OCR-only or failed documents are
+    filtered out instead of entering the review queue."""
+    _remove_email_invoice(
+        db,
+        invoice,
+        "email.discard_unverified",
+        f"{invoice.original_name} 金蝶发票云未能校验为有效发票，已自动过滤",
+    )
 
 
 def sync_mailbox(db: Session, mailbox: Mailbox) -> dict[str, int]:
@@ -198,6 +211,7 @@ def sync_mailbox(db: Session, mailbox: Mailbox) -> dict[str, int]:
     scanned = 0
     failed = 0
     max_uid = mailbox.last_uid
+    provider_ready = provider_configured(get_integrations(db, user_id=mailbox.created_by))
     try:
         start_uid = max(1, mailbox.last_uid + 1)
         status, data = client.uid("search", None, f"UID {start_uid}:*")
@@ -237,6 +251,9 @@ def sync_mailbox(db: Session, mailbox: Mailbox) -> dict[str, int]:
                         fresh = db.get(Invoice, invoice.id)
                         if fresh and _discard_non_invoice(db, fresh):
                             continue
+                        if fresh and provider_ready and fresh.status not in {"verified", "duplicate"}:
+                            _discard_not_cloud_verified(db, fresh)
+                            continue
                         current_imported += 1
                 urls: set[str] = set()
                 for body in _email_bodies(message):
@@ -260,6 +277,9 @@ def sync_mailbox(db: Session, mailbox: Mailbox) -> dict[str, int]:
                             db.expire_all()
                             fresh = db.get(Invoice, invoice.id)
                             if fresh and _discard_non_invoice(db, fresh):
+                                continue
+                            if fresh and provider_ready and fresh.status not in {"verified", "duplicate"}:
+                                _discard_not_cloud_verified(db, fresh)
                                 continue
                             current_imported += 1
                     except Exception as exc:

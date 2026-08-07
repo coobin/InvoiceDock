@@ -219,6 +219,14 @@ def _provider_fields_valid(fields: dict[str, Any]) -> bool:
     )
 
 
+def provider_configured(config: dict[str, str]) -> bool:
+    """Whether the 发票云 provider is enabled and fully configured, and the
+    admin has allowed cloud verification for the current user."""
+    return as_bool(config.get("verify_provider", "true")) and (
+        _piaozone_complete(config) or _kingdee_complete(config)
+    )
+
+
 def has_invoice_identity(invoice: Invoice) -> bool:
     """A document is treated as an invoice when extraction produced at least
     one of: 发票号码 / 金额 / 销售方 / 购买方."""

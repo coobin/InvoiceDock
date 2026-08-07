@@ -47,3 +47,21 @@ def test_discard_keeps_documents_with_invoice_identity(tmp_path, monkeypatch) ->
     assert mail_service._discard_non_invoice(db, invoice) is False
     assert db.deleted == []
     assert (uploads / "y.pdf").exists()
+
+
+def test_discard_not_cloud_verified_removes_record_and_files(tmp_path, monkeypatch) -> None:
+    uploads = tmp_path / "uploads"
+    previews = tmp_path / "previews"
+    uploads.mkdir()
+    previews.mkdir()
+    monkeypatch.setattr(
+        mail_service, "get_settings", lambda: SimpleNamespace(upload_dir=uploads, preview_dir=previews)
+    )
+    db = _fake_db()
+    invoice = SimpleNamespace(id="3", stored_name="z.pdf", original_name="回单.pdf")
+    (uploads / "z.pdf").write_bytes(b"%PDF")
+    (previews / "3.jpg").write_bytes(b"image")
+    mail_service._discard_not_cloud_verified(db, invoice)
+    assert db.deleted == [invoice]
+    assert not (uploads / "z.pdf").exists()
+    assert not (previews / "3.jpg").exists()
