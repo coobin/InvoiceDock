@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from io import BytesIO
 from pathlib import Path
 
@@ -15,6 +16,24 @@ from app.services.extractor import render_first_page
 
 A4_WIDTH = 595.28
 A4_HEIGHT = 841.89
+EXCEL_FORMULA_PREFIXES = ("=", "+", "-", "@")
+EXCEL_ILLEGAL_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def _excel_safe(value: object) -> object:
+    """Return user-controlled text without allowing spreadsheet formulas.
+
+    Invoice fields originate in uploaded files and email attachment names.  A
+    leading formula marker would otherwise be evaluated when an administrator
+    opens the exported workbook, which can trigger links or external actions.
+    Numeric and date values are preserved as their native types.
+    """
+    if not isinstance(value, str):
+        return value
+    cleaned = EXCEL_ILLEGAL_CONTROL_CHARS.sub(" ", value)
+    if cleaned.lstrip().startswith(EXCEL_FORMULA_PREFIXES):
+        return "'" + cleaned
+    return cleaned
 
 
 def _reader_for_invoice(invoice: Invoice) -> PdfReader:
@@ -110,7 +129,7 @@ def make_invoice_workbook(invoices: list[Invoice]) -> bytes:
         cell.fill = PatternFill("solid", fgColor="173B5E")
         cell.alignment = Alignment(horizontal="center")
     for item in invoices:
-        sheet.append([
+        row = [
             item.status,
             item.verification_method,
             item.invoice_type,
@@ -129,7 +148,8 @@ def make_invoice_workbook(invoices: list[Invoice]) -> bytes:
             item.title_warning,
             item.original_name,
             item.created_at.isoformat(sep=" ", timespec="seconds"),
-        ])
+        ]
+        sheet.append([_excel_safe(value) for value in row])
     widths = [12, 12, 20, 16, 22, 14, 32, 22, 32, 22, 15, 15, 15, 14, 14, 24, 36, 21]
     for index, width in enumerate(widths, start=1):
         sheet.column_dimensions[chr(64 + index) if index <= 26 else f"A{chr(64 + index - 26)}"].width = width

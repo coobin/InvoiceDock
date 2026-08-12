@@ -12,6 +12,8 @@ from defusedxml import ElementTree as SafeET
 from PIL import Image
 from pypdf import PdfReader
 
+from app.config import get_settings
+
 FIELDS = [
     "invoice_type",
     "invoice_code",
@@ -27,6 +29,8 @@ FIELDS = [
     "total_amount",
     "category",
 ]
+MAX_OFD_XML_BYTES = 8 * 1024 * 1024
+MAX_OFD_COMPRESSION_RATIO = 500
 
 
 def _clean_text(value: str) -> str:
@@ -72,10 +76,40 @@ def extract_ofd_text(path: Path) -> tuple[str, dict[str, str]]:
     pairs: dict[str, str] = {}
     parts: list[str] = []
     with zipfile.ZipFile(path) as archive:
-        xml_names = [name for name in archive.namelist() if name.lower().endswith(".xml")][:100]
-        for name in xml_names:
+        settings = get_settings()
+        max_files = max(1, int(getattr(settings, "max_ofd_files", 200)))
+        max_uncompressed = max(
+            1, int(getattr(settings, "max_ofd_uncompressed_mb", 100))
+        ) * 1024 * 1024
+        entries = [entry for entry in archive.infolist() if not entry.is_dir()]
+        if len(entries) > max_files:
+            raise ValueError(f"OFD 内文件数量超过 {max_files} 个")
+        total_uncompressed = sum(max(0, entry.file_size) for entry in entries)
+        if total_uncompressed > max_uncompressed:
+            raise ValueError(
+                f"OFD 解压后大小超过 {max_uncompressed // (1024 * 1024)} MB"
+            )
+        for entry in entries:
+            if entry.flag_bits & 0x1:
+                raise ValueError("不支持加密的 OFD 文件")
+            if entry.file_size and (
+                entry.compress_size <= 0
+                or entry.file_size / entry.compress_size > MAX_OFD_COMPRESSION_RATIO
+            ):
+                raise ValueError("OFD 包含异常高压缩比文件")
+
+        xml_entries = [entry for entry in entries if entry.filename.lower().endswith(".xml")]
+        for entry in xml_entries:
+            if entry.file_size > MAX_OFD_XML_BYTES:
+                raise ValueError("OFD 内单个 XML 文件过大")
             try:
-                text, current = extract_xml_text(archive.read(name))
+                with archive.open(entry) as stream:
+                    data = stream.read(MAX_OFD_XML_BYTES + 1)
+                if len(data) > MAX_OFD_XML_BYTES:
+                    raise ValueError("OFD 内单个 XML 文件过大")
+                text, current = extract_xml_text(data)
+            except ValueError:
+                raise
             except Exception:
                 continue
             pairs.update(current)

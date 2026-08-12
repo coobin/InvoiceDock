@@ -24,23 +24,36 @@ def session_factory(tmp_path):
 
 
 def _fake_settings(tmp_path):
-    return SimpleNamespace(upload_dir=tmp_path, tz="Asia/Shanghai")
+    return SimpleNamespace(
+        upload_dir=tmp_path,
+        tz="Asia/Shanghai",
+        max_concurrent_processing_jobs=4,
+        max_concurrent_jobs_per_user=2,
+        max_user_daily_ocr=200,
+        max_user_daily_llm=100,
+    )
 
 
 def test_verification_cache_roundtrip(session_factory, tmp_path, monkeypatch):
     monkeypatch.setattr(verifier, "get_settings", lambda: _fake_settings(tmp_path))
-    invoice = Invoice(
-        original_name="a.pdf",
-        stored_name="a.pdf",
-        mime_type="application/pdf",
-        file_size=1,
-        sha256="a" * 64,
-        invoice_number="24500000123456789012",
-        total_amount=99.8,
-        seller_name="示例销售方",
-        kingdee_data={"raw": True},
-    )
     with session_factory() as db:
+        owner = User(username="cache-owner", email="cache-owner@example.com")
+        db.add(owner)
+        db.flush()
+        invoice = Invoice(
+            original_name="a.pdf",
+            stored_name="a.pdf",
+            mime_type="application/pdf",
+            file_size=1,
+            sha256="a" * 64,
+            owner_id=owner.id,
+            invoice_code="044001",
+            invoice_number="24500000123456789012",
+            invoice_date="2026-08-12",
+            total_amount=99.8,
+            seller_name="示例销售方",
+            kingdee_data={"raw": True},
+        )
         verifier._save_verification_cache(db, invoice, "piaozone")
         verifier._save_verification_cache(db, invoice, "piaozone")
         db.commit()
@@ -50,7 +63,14 @@ def test_verification_cache_roundtrip(session_factory, tmp_path, monkeypatch):
         assert rows[0].method == "piaozone"
         assert rows[0].fields["total_amount"] == 99.8
         assert rows[0].kingdee_data == {"raw": True}
-        cached = verifier._find_verification_cache(db, "24500000123456789012")
+        cached = verifier._find_verification_cache(
+            db,
+            owner_id=owner.id,
+            invoice_code="044001",
+            invoice_number="24500000123456789012",
+            invoice_date="2026/08/12",
+            total_amount="99.80",
+        )
         assert cached is not None
         assert cached.invoice_number == "24500000123456789012"
 
@@ -58,9 +78,31 @@ def test_verification_cache_roundtrip(session_factory, tmp_path, monkeypatch):
 def test_verification_cache_ignores_other_days(session_factory, tmp_path, monkeypatch):
     monkeypatch.setattr(verifier, "get_settings", lambda: _fake_settings(tmp_path))
     with session_factory() as db:
-        db.add(VerificationCache(invoice_number="11", verify_date="2000-01-01", method="kingdee"))
+        owner = User(username="old-cache", email="old-cache@example.com")
+        db.add(owner)
+        db.flush()
+        db.add(
+            VerificationCache(
+                owner_id=owner.id,
+                invoice_number="11",
+                invoice_date="20260812",
+                total_amount="1.00",
+                verify_date="2000-01-01",
+                method="kingdee",
+            )
+        )
         db.commit()
-        assert verifier._find_verification_cache(db, "11") is None
+        assert (
+            verifier._find_verification_cache(
+                db,
+                owner_id=owner.id,
+                invoice_code="",
+                invoice_number="11",
+                invoice_date="2026-08-12",
+                total_amount=1,
+            )
+            is None
+        )
 
 
 def test_process_invoice_reuses_today_cache_and_skips_provider(session_factory, tmp_path, monkeypatch):
@@ -72,6 +114,9 @@ def test_process_invoice_reuses_today_cache_and_skips_provider(session_factory, 
         raise AssertionError("发票云不应被调用")
 
     with session_factory() as db:
+        owner = User(username="reuse-owner", email="reuse-owner@example.com")
+        db.add(owner)
+        db.flush()
         db.add(AppSetting(key="piaozone_enabled", value="true"))
         db.add(AppSetting(key="piaozone_base_url", value="https://example.com"))
         db.add(AppSetting(key="piaozone_client_id", value="cid"))
@@ -83,11 +128,16 @@ def test_process_invoice_reuses_today_cache_and_skips_provider(session_factory, 
             file_size=8,
             sha256="b" * 64,
             status="pending",
+            owner_id=owner.id,
         )
         db.add(invoice)
         db.add(
             VerificationCache(
+                owner_id=owner.id,
+                invoice_code="044001",
                 invoice_number="24500000123456789012",
+                invoice_date="20260812",
+                total_amount="99.80",
                 verify_date=verifier._today_str(),
                 method="piaozone",
                 fields={
@@ -114,7 +164,12 @@ def test_process_invoice_reuses_today_cache_and_skips_provider(session_factory, 
     monkeypatch.setattr(
         verifier,
         "parse_invoice_fields",
-        lambda text, structured: {"invoice_number": "24500000123456789012"},
+        lambda text, structured: {
+            "invoice_code": "044001",
+            "invoice_number": "24500000123456789012",
+            "invoice_date": "2026-08-12",
+            "total_amount": 99.8,
+        },
     )
     monkeypatch.setattr(verifier, "verify_with_piaozone", fail_provider)
     monkeypatch.setattr(verifier, "verify_with_kingdee", fail_provider)
@@ -122,6 +177,9 @@ def test_process_invoice_reuses_today_cache_and_skips_provider(session_factory, 
     verifier.process_invoice(invoice_id)
 
     with session_factory() as db:
+        owner = User(username="fresh-owner", email="fresh-owner@example.com")
+        db.add(owner)
+        db.flush()
         invoice = db.get(Invoice, invoice_id)
         assert provider_calls == []
         assert invoice.status == "verified"
@@ -207,6 +265,9 @@ def test_provider_verification_writes_today_cache(session_factory, tmp_path, mon
         db.add(AppSetting(key="piaozone_base_url", value="https://example.com"))
         db.add(AppSetting(key="piaozone_client_id", value="cid"))
         db.add(AppSetting(key="piaozone_client_secret", value="secret"))
+        owner = User(username="cache-writer", email="cache-writer@example.com")
+        db.add(owner)
+        db.flush()
         invoice = Invoice(
             original_name="fresh.pdf",
             stored_name="fresh.pdf",
@@ -214,6 +275,7 @@ def test_provider_verification_writes_today_cache(session_factory, tmp_path, mon
             file_size=8,
             sha256="c" * 64,
             status="pending",
+            owner_id=owner.id,
         )
         db.add(invoice)
         db.commit()
@@ -237,7 +299,9 @@ def test_provider_verification_writes_today_cache(session_factory, tmp_path, mon
         lambda path, config: (
             {
                 "invoice_type": "增值税电子普通发票",
+                "invoice_code": "044001",
                 "invoice_number": "99990000111122223333",
+                "invoice_date": "2026-08-12",
                 "seller_name": "示例销售方",
                 "buyer_name": "示例购买方",
                 "total_amount": 12.34,

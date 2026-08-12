@@ -84,3 +84,27 @@ def test_only_llm_credentials_are_user_overridable(db_session):
     assert values["kingdee_base_url"] != "https://user-tax.example.com"
     assert values["llm_base_url"] == "https://user-llm.example.com"
     assert settings_service.user_custom_integrations(db_session, user_id) == {"llm"}
+
+
+def test_database_value_is_not_shadowed_by_a_model_default(monkeypatch, db_session):
+    configured = SimpleNamespace(
+        model_fields_set=set(),
+        **settings_service.INTEGRATION_DEFAULTS,
+    )
+    monkeypatch.setattr(settings_service, "get_settings", lambda: configured)
+    db_session.add(AppSetting(key="llm_model", value="database-model"))
+    db_session.commit()
+
+    assert settings_service.get_integrations(db_session)["llm_model"] == "database-model"
+
+
+def test_explicit_environment_value_wins_over_database(monkeypatch, db_session):
+    configured = SimpleNamespace(
+        model_fields_set={"llm_model"},
+        **{**settings_service.INTEGRATION_DEFAULTS, "llm_model": "environment-model"},
+    )
+    monkeypatch.setattr(settings_service, "get_settings", lambda: configured)
+    db_session.add(AppSetting(key="llm_model", value="database-model"))
+    db_session.commit()
+
+    assert settings_service.get_integrations(db_session)["llm_model"] == "environment-model"

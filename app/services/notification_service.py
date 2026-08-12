@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
 from app.models import JobLog
+from app.services.network_security import OutboundTargetError, validate_outbound_url
 from app.services.settings_service import as_bool, get_value, set_value
 
 BARK_URL_KEY = "bark_url"
@@ -169,6 +170,10 @@ def save_notification_settings(
 def send_bark_notification(url: str, title: str, body: str) -> None:
     """Send one Bark message, raising on invalid configuration or delivery failure."""
     target = _validate_bark_url(url)
+    try:
+        validate_outbound_url(target)
+    except OutboundTargetError as exc:
+        raise NotificationConfigurationError(str(exc)) from exc
     payload = {"title": str(title), "body": str(body), "group": "InvoiceDock"}
     try:
         with httpx.Client(timeout=REQUEST_TIMEOUT_SECONDS, follow_redirects=False) as client:

@@ -29,9 +29,9 @@
     {% if user.password_hash %}
     <form action="/profile/password" method="post" class="form-stack">
       <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
-      <label>当前密码<input type="password" name="current_password" autocomplete="current-password" required></label>
-      <label>新密码<input type="password" name="new_password" autocomplete="new-password" minlength="12" required><small>至少 12 个字符，建议使用密码管理器生成。</small></label>
-      <label>确认新密码<input type="password" name="confirm_password" autocomplete="new-password" minlength="12" required></label>
+      <label>当前密码<input type="password" name="current_password" autocomplete="current-password" maxlength="256" required></label>
+      <label>新密码<input type="password" name="new_password" autocomplete="new-password" minlength="12" maxlength="256" required><small>至少 12 个字符，并同时包含字母和数字。</small></label>
+      <label>确认新密码<input type="password" name="confirm_password" autocomplete="new-password" minlength="12" maxlength="256" required></label>
       <button class="button primary" type="submit">更新密码</button>
     </form>
     {% else %}

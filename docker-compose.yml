@@ -7,19 +7,34 @@ services:
       dockerfile: Dockerfile
     image: invoicedock:local
     restart: unless-stopped
+    init: true
     env_file:
       - .env
     user: "${PUID:-1000}:${PGID:-1000}"
     environment:
       DATA_DIR: /data
       DATABASE_URL: sqlite:////data/invoicedock.db
+      # Uvicorn and the application must agree on which direct peer may
+      # supply Forwarded/X-Forwarded-* headers. Never use "*" here.
+      FORWARDED_ALLOW_IPS: "${FORWARDED_ALLOW_IPS:-127.0.0.1}"
+      TRUSTED_PROXY_IPS: "${TRUSTED_PROXY_IPS:-127.0.0.1,::1,172.16.0.0/12}"
     ports:
-      - "${APP_PORT:-8765}:8000"
+      - "${APP_BIND_IP:-127.0.0.1}:${APP_PORT:-8765}:8000"
     volumes:
-      - ./data:/data
+      - ./data:/data:rw
+    read_only: true
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    pids_limit: "${CONTAINER_PIDS_LIMIT:-256}"
+    cpus: "${CONTAINER_CPU_LIMIT:-2.0}"
+    mem_limit: "${CONTAINER_MEMORY_LIMIT:-2g}"
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "${CONTAINER_LOG_MAX_SIZE:-10m}"
+        max-file: "${CONTAINER_LOG_MAX_FILES:-3}"
     tmpfs:
-      - /tmp:size=256m,mode=1777
+      - /tmp:size=${CONTAINER_TMPFS_SIZE:-256m},mode=1777,noexec,nosuid,nodev

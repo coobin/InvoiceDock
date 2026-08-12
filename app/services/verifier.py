@@ -26,7 +26,13 @@ from app.services.extractor import (
     image_to_jpeg_bytes,
     parse_invoice_fields,
 )
-from app.services.quota_service import reserve_tax_verification
+from app.services.network_security import validate_outbound_url
+from app.services.quota_service import (
+    ProcessingCapacityError,
+    processing_slot,
+    reserve_resource_usage,
+    reserve_tax_verification,
+)
 from app.services.settings_service import as_bool, get_integrations
 from app.services.title_service import title_warning
 
@@ -366,6 +372,7 @@ category(交通出行/住宿/餐饮/办公用品/通讯/物流/未分类之一)�
 
 def extract_with_llm(text: str, preview_bytes: bytes | None, config: dict[str, str]) -> dict[str, Any]:
     base_url = config["llm_base_url"].rstrip("/")
+    target_url = validate_outbound_url(f"{base_url}/chat/completions")
     user_text = f"请提取这张发票。OCR/文本层内容如下：\n{text[:18000]}"
     content: Any = user_text
     if preview_bytes and as_bool(config.get("llm_vision", "true")):
@@ -386,7 +393,7 @@ def extract_with_llm(text: str, preview_bytes: bytes | None, config: dict[str, s
     if config.get("llm_api_key"):
         headers["Authorization"] = f"Bearer {config['llm_api_key']}"
     with httpx.Client(timeout=120.0) as client:
-        response = client.post(f"{base_url}/chat/completions", headers=headers, json=request_body)
+        response = client.post(target_url, headers=headers, json=request_body)
         response.raise_for_status()
         payload = response.json()
     try:
@@ -451,7 +458,11 @@ def _apply_fields(invoice: Invoice, fields: dict[str, Any]) -> None:
 def _find_business_duplicate(invoice: Invoice, db) -> Invoice | None:  # type: ignore[no-untyped-def]
     if not invoice.invoice_number:
         return None
-    filters = [Invoice.id != invoice.id, Invoice.invoice_number == invoice.invoice_number]
+    filters = [
+        Invoice.id != invoice.id,
+        Invoice.owner_id == invoice.owner_id,
+        Invoice.invoice_number == invoice.invoice_number,
+    ]
     if invoice.invoice_code:
         filters.append(Invoice.invoice_code == invoice.invoice_code)
     else:
@@ -473,15 +484,54 @@ def _today_str() -> str:
     return _local_now().strftime("%Y-%m-%d")
 
 
-def _find_verification_cache(db, invoice_number: str) -> VerificationCache | None:  # type: ignore[no-untyped-def]
-    """查找当天是否已有同一发票号的发票云查验结果。"""
-    number = (invoice_number or "").strip()
-    if not number:
+def _verification_cache_fingerprint(
+    owner_id: str | None,
+    invoice_code: Any,
+    invoice_number: Any,
+    invoice_date: Any,
+    total_amount: Any,
+) -> tuple[str, str, str, str, str] | None:
+    """Return a stable tenant-scoped identity suitable for cache reuse.
+
+    Invoice code is allowed to be empty because newer all-electronic invoices
+    do not always carry one. Date and amount are mandatory: an OCR result that
+    found only a number is not strong enough to inherit a tax-provider result.
+    """
+    if not owner_id:
         return None
+    code = re.sub(r"\s", "", str(invoice_code or "")).upper()
+    number = re.sub(r"\s", "", str(invoice_number or "")).upper()
+    issue_date = re.sub(r"\D", "", str(invoice_date or ""))
+    amount = _float(total_amount)
+    if not number or not issue_date or amount is None:
+        return None
+    return owner_id, code, number, issue_date, f"{amount:.2f}"
+
+
+def _find_verification_cache(
+    db,  # type: ignore[no-untyped-def]
+    *,
+    owner_id: str | None,
+    invoice_code: Any,
+    invoice_number: Any,
+    invoice_date: Any,
+    total_amount: Any,
+) -> VerificationCache | None:
+    """查找当天同一用户、同一完整发票指纹的发票云查验结果。"""
+    fingerprint = _verification_cache_fingerprint(
+        owner_id, invoice_code, invoice_number, invoice_date, total_amount
+    )
+    if fingerprint is None:
+        return None
+    owner, code, number, issue_date, amount = fingerprint
     return db.scalar(
         select(VerificationCache)
         .where(
+            VerificationCache.owner_id == owner,
+            VerificationCache.invoice_code == code,
             VerificationCache.invoice_number == number,
+            VerificationCache.invoice_date == issue_date,
+            VerificationCache.total_amount == amount,
             VerificationCache.verify_date == _today_str(),
         )
         .order_by(VerificationCache.created_at.asc())
@@ -490,24 +540,42 @@ def _find_verification_cache(db, invoice_number: str) -> VerificationCache | Non
 
 
 def _save_verification_cache(db, invoice: Invoice, method: str) -> None:  # type: ignore[no-untyped-def]
-    """记录当天已通过发票云查验的发票号，供同日再次上传时跳过发票云。"""
-    number = (invoice.invoice_number or "").strip()
-    if not number:
+    """记录当天已通过发票云查验的租户级完整发票指纹。"""
+    fingerprint = _verification_cache_fingerprint(
+        invoice.owner_id,
+        invoice.invoice_code,
+        invoice.invoice_number,
+        invoice.invoice_date,
+        invoice.total_amount,
+    )
+    if fingerprint is None:
         return
+    owner, code, number, issue_date, amount = fingerprint
     today = _today_str()
     row = db.scalar(
         select(VerificationCache).where(
+            VerificationCache.owner_id == owner,
+            VerificationCache.invoice_code == code,
             VerificationCache.invoice_number == number,
+            VerificationCache.invoice_date == issue_date,
+            VerificationCache.total_amount == amount,
             VerificationCache.verify_date == today,
         )
     )
     if row is None:
-        row = VerificationCache(invoice_number=number, verify_date=today)
+        row = VerificationCache(
+            owner_id=owner,
+            invoice_code=code,
+            invoice_number=number,
+            invoice_date=issue_date,
+            total_amount=amount,
+            verify_date=today,
+        )
         db.add(row)
     row.method = method
     row.fields = {field: getattr(invoice, field, None) for field in FIELDS}
     row.kingdee_data = dict(invoice.kingdee_data or {})
-    row.created_by = invoice.owner_id
+    row.created_by = owner
     # 顺手清理 30 天前的旧记录，避免缓存表无限增长
     cutoff = (_local_now() - timedelta(days=30)).strftime("%Y-%m-%d")
     db.execute(delete(VerificationCache).where(VerificationCache.verify_date < cutoff))
@@ -546,7 +614,32 @@ def _reserve_provider_call(db, invoice: Invoice, provider: str) -> tuple[bool, s
     return False, message
 
 
-def process_invoice(invoice_id: str) -> None:
+def _reserve_local_call(db, invoice: Invoice, resource: str) -> tuple[bool, str]:  # type: ignore[no-untyped-def]
+    allowed, used, limit = reserve_resource_usage(db, invoice.owner_id, resource)
+    if allowed:
+        return True, ""
+    labels = {"ocr": "OCR/文本提取", "llm": "LLM"}
+    label = labels.get(resource, resource)
+    message = f"该用户今日 {label} 已达到 {limit} 次上限"
+    db.add(
+        JobLog(
+            user_id=invoice.owner_id,
+            level="warning",
+            event=f"verify.{resource}_daily_limit",
+            message=f"{invoice.original_name}：{message}",
+            details={
+                "invoice_id": invoice.id,
+                "user_id": invoice.owner_id,
+                "resource": resource,
+                "used": used,
+                "limit": limit,
+            },
+        )
+    )
+    return False, message
+
+
+def _process_invoice(invoice_id: str) -> None:
     settings = get_settings()
     with SessionLocal() as db:
         invoice = db.get(Invoice, invoice_id)
@@ -563,6 +656,8 @@ def process_invoice(invoice_id: str) -> None:
         llm_allowed = as_bool(config.get("verify_llm", "true"))
         provider_error = ""
         quota_exhausted = False
+        local_quota_error = ""
+        extraction_reserved = False
         try:
             providers_ready = (provider_allowed and _piaozone_complete(config)) or (
                 provider_allowed and _kingdee_complete(config)
@@ -570,17 +665,42 @@ def process_invoice(invoice_id: str) -> None:
             cache_hit = False
             early_extraction = None
             if providers_ready:
-                # 先本地识别发票号并查当天缓存：若该发票号今天已通过发票云查验，
-                # 直接复用结果，不再调用税务发票云（避免重复消耗单票每日查验次数）。
-                candidate = (invoice.invoice_number or "").strip()
-                if not candidate:
-                    try:
-                        text, structured, preview = extract_document(path, invoice.mime_type)
-                        early_extraction = (text, structured, preview)
-                        candidate = (parse_invoice_fields(text, structured).get("invoice_number") or "").strip()
-                    except Exception as exc:
-                        logger.warning("本地识别发票号失败，跳过缓存检查：%s", exc)
-                cache = _find_verification_cache(db, candidate) if candidate else None
+                # 只有当用户、发票代码、号码、开票日期和价税合计都匹配时
+                # 才能复用缓存。仅 OCR 出一个票号时仍必须调用发票云。
+                candidate_fields: dict[str, Any] = {
+                    "invoice_code": invoice.invoice_code,
+                    "invoice_number": invoice.invoice_number,
+                    "invoice_date": invoice.invoice_date,
+                    "total_amount": invoice.total_amount,
+                }
+                if ocr_allowed and _verification_cache_fingerprint(
+                    invoice.owner_id,
+                    candidate_fields["invoice_code"],
+                    candidate_fields["invoice_number"],
+                    candidate_fields["invoice_date"],
+                    candidate_fields["total_amount"],
+                ) is None:
+                    extraction_reserved, local_quota_error = _reserve_local_call(
+                        db, invoice, "ocr"
+                    )
+                    if extraction_reserved:
+                        try:
+                            text, structured, preview = extract_document(path, invoice.mime_type)
+                            early_extraction = (text, structured, preview)
+                            parsed_fields = parse_invoice_fields(text, structured)
+                            for field in candidate_fields:
+                                if candidate_fields[field] in (None, ""):
+                                    candidate_fields[field] = parsed_fields.get(field)
+                        except Exception as exc:
+                            logger.warning("本地识别发票指纹失败，跳过缓存检查：%s", exc)
+                cache = _find_verification_cache(
+                    db,
+                    owner_id=invoice.owner_id,
+                    invoice_code=candidate_fields["invoice_code"],
+                    invoice_number=candidate_fields["invoice_number"],
+                    invoice_date=candidate_fields["invoice_date"],
+                    total_amount=candidate_fields["total_amount"],
+                )
                 if cache:
                     _apply_cached_verification(invoice, cache)
                     cache_hit = True
@@ -643,7 +763,16 @@ def process_invoice(invoice_id: str) -> None:
                     invoice.status = "review"
                     invoice.error_message = "发票云查验未完成，且已禁用本地 OCR/LLM 回退，请人工处理"
                 else:
-                    if early_extraction is not None:
+                    if not extraction_reserved:
+                        extraction_reserved, local_quota_error = _reserve_local_call(
+                            db, invoice, "ocr"
+                        )
+                    if not extraction_reserved:
+                        invoice.verification_method = ""
+                        invoice.status = "review"
+                        invoice.error_message = local_quota_error
+                        text, structured, preview = "", {}, None
+                    elif early_extraction is not None:
                         text, structured, preview = early_extraction
                     else:
                         text, structured, preview = extract_document(path, invoice.mime_type)
@@ -651,34 +780,47 @@ def process_invoice(invoice_id: str) -> None:
                     ocr_fields = parse_invoice_fields(text, structured) if ocr_allowed else {}
                     invoice.ocr_data = ocr_fields
                     llm_configured = as_bool(config.get("llm_enabled")) and bool(config.get("llm_base_url") and config.get("llm_model"))
-                    if llm_allowed and llm_configured:
-                        try:
-                            preview_bytes = image_to_jpeg_bytes(preview) if preview else None
-                            llm_fields = extract_with_llm(text, preview_bytes, config)
-                            invoice.llm_data = llm_fields
-                            if ocr_allowed:
-                                merged, conflicts, confidence, consistent = compare_sources(ocr_fields, llm_fields)
-                                _apply_fields(invoice, merged)
-                                invoice.conflicts = conflicts
-                                invoice.confidence = confidence
-                                invoice.verification_method = "dual"
-                                invoice.status = "consistent" if consistent else "review"
-                                if consistent:
-                                    invoice.verified_at = datetime.now(UTC).replace(tzinfo=None)
-                            else:
-                                _apply_fields(invoice, llm_fields)
-                                invoice.verification_method = "llm"
-                                invoice.status = "review"
-                        except Exception as exc:
+                    if extraction_reserved and llm_allowed and llm_configured:
+                        llm_quota_allowed, llm_quota_error = _reserve_local_call(
+                            db, invoice, "llm"
+                        )
+                        if not llm_quota_allowed:
                             if ocr_allowed:
                                 _apply_fields(invoice, ocr_fields)
                                 invoice.verification_method = "ocr"
-                                invoice.status = "review"
-                                invoice.error_message = f"LLM 提取失败：{exc}"
-                            else:
-                                invoice.verification_method = ""
-                                invoice.status = "review"
-                                invoice.error_message = f"LLM 提取失败：{exc}"
+                            invoice.status = "review"
+                            invoice.error_message = llm_quota_error
+                        else:
+                            try:
+                                preview_bytes = image_to_jpeg_bytes(preview) if preview else None
+                                llm_fields = extract_with_llm(text, preview_bytes, config)
+                                invoice.llm_data = llm_fields
+                                if ocr_allowed:
+                                    merged, conflicts, confidence, consistent = compare_sources(ocr_fields, llm_fields)
+                                    _apply_fields(invoice, merged)
+                                    invoice.conflicts = conflicts
+                                    invoice.confidence = confidence
+                                    invoice.verification_method = "dual"
+                                    invoice.status = "consistent" if consistent else "review"
+                                    if consistent:
+                                        invoice.verified_at = datetime.now(UTC).replace(tzinfo=None)
+                                else:
+                                    _apply_fields(invoice, llm_fields)
+                                    invoice.verification_method = "llm"
+                                    invoice.status = "review"
+                            except Exception as exc:
+                                if ocr_allowed:
+                                    _apply_fields(invoice, ocr_fields)
+                                    invoice.verification_method = "ocr"
+                                    invoice.status = "review"
+                                    invoice.error_message = f"LLM 提取失败：{exc}"
+                                else:
+                                    invoice.verification_method = ""
+                                    invoice.status = "review"
+                                    invoice.error_message = f"LLM 提取失败：{exc}"
+                    elif not extraction_reserved:
+                        # Status and the precise quota message were set above.
+                        pass
                     elif ocr_allowed:
                         _apply_fields(invoice, ocr_fields)
                         invoice.verification_method = "ocr"
@@ -698,6 +840,9 @@ def process_invoice(invoice_id: str) -> None:
                 ) or "未分类"
             owner = db.get(User, invoice.owner_id) if invoice.owner_id else None
             invoice.title_warning = title_warning(db, owner, invoice.buyer_name, invoice.buyer_tax_id)
+            # 每次重新处理都从当前用户的数据重新计算重复关系，
+            # 同时清理旧版可能留下的跨用户 duplicate_of。
+            invoice.duplicate_of = None
             duplicate = _find_business_duplicate(invoice, db)
             if duplicate:
                 invoice.duplicate_of = duplicate.id
@@ -716,6 +861,35 @@ def process_invoice(invoice_id: str) -> None:
             invoice.status = "failed"
             invoice.error_message = str(exc)[:1000]
             db.add(JobLog(user_id=invoice.owner_id, level="error", event="invoice.failed", message=str(exc)[:1000], details={"invoice_id": invoice.id}))
+            db.commit()
+
+
+def process_invoice(invoice_id: str) -> None:
+    """Run one invoice inside bounded global and per-user processing slots."""
+    with SessionLocal() as lookup:
+        row = lookup.get(Invoice, invoice_id)
+        owner_id = row.owner_id if row else None
+    if row is None:
+        return
+    try:
+        with processing_slot(owner_id):
+            _process_invoice(invoice_id)
+    except ProcessingCapacityError as exc:
+        with SessionLocal() as db:
+            invoice = db.get(Invoice, invoice_id)
+            if not invoice:
+                return
+            invoice.status = "pending"
+            invoice.error_message = str(exc)
+            db.add(
+                JobLog(
+                    user_id=invoice.owner_id,
+                    level="warning",
+                    event="invoice.queue_busy",
+                    message=f"{invoice.original_name}：{exc}",
+                    details={"invoice_id": invoice.id},
+                )
+            )
             db.commit()
 
 

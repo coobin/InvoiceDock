@@ -103,6 +103,10 @@
     sync();
   });
 
+  all('[data-auto-submit]').forEach((control) => {
+    control.addEventListener('change', () => control.form?.requestSubmit());
+  });
+
   if (window.location.pathname === '/integrations') {
     const scrollKey = 'invoicedock:integrations-scroll-y';
     try {

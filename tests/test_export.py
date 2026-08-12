@@ -94,3 +94,24 @@ def test_workbook_contains_invoice_ledger_row():
     assert sheet["E2"].value == "24500000000012345678"
     assert sheet["G2"].value == "远山示例酒店有限公司"
     assert sheet["M2"].value == 500.0
+
+
+def test_workbook_escapes_formula_injection_and_illegal_control_characters():
+    invoice = Invoice(
+        original_name="=HYPERLINK(\"https://evil.example\")",
+        stored_name="invoice.pdf",
+        mime_type="application/pdf",
+        file_size=1,
+        sha256="formula",
+        seller_name="  +cmd|' /C calc!A0",
+        buyer_name="safe\x01 buyer",
+        created_at=datetime(2026, 8, 12, 12, 0, 0),
+    )
+
+    workbook = load_workbook(BytesIO(export_service.make_invoice_workbook([invoice])))
+    sheet = workbook["发票台账"]
+    assert sheet["G2"].data_type != "f"
+    assert sheet["G2"].value.startswith("'")
+    assert sheet["I2"].value == "safe  buyer"
+    assert sheet["Q2"].data_type != "f"
+    assert sheet["Q2"].value.startswith("'=")

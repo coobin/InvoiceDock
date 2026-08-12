@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base
-from app.models import Invoice
+from app.models import Invoice, User
 from app.services import mail_service
 
 
@@ -176,3 +176,59 @@ def test_pdf_duplicate_when_original_is_pdf_is_discarded(session_factory, tmp_pa
         assert db.get(Invoice, duplicate.id) is None
         assert db.get(Invoice, original.id) is not None
         assert not (uploads / "a-again.pdf").exists()
+
+
+def test_pdf_dedupe_never_deletes_another_owners_invoice(
+    session_factory, tmp_path, monkeypatch
+) -> None:
+    uploads, previews = _setup_dirs(tmp_path)
+    monkeypatch.setattr(
+        mail_service,
+        "get_settings",
+        lambda: SimpleNamespace(upload_dir=uploads, preview_dir=previews),
+    )
+    with session_factory() as db:
+        first_user = User(username="mail-first", email="mail-first@example.com")
+        second_user = User(username="mail-second", email="mail-second@example.com")
+        db.add_all([first_user, second_user])
+        db.flush()
+        original = _invoice(
+            "other-user.jpg",
+            "image/jpeg",
+            "4" * 64,
+            status="verified",
+            owner_id=first_user.id,
+        )
+        db.add(original)
+        db.commit()
+        (uploads / original.stored_name).write_bytes(b"jpeg")
+        duplicate = _invoice(
+            "incoming.pdf",
+            "application/pdf",
+            "5" * 64,
+            status="duplicate",
+            duplicate_of=original.id,
+            owner_id=second_user.id,
+        )
+        db.add(duplicate)
+        db.commit()
+        (uploads / duplicate.stored_name).write_bytes(b"%PDF")
+
+        assert mail_service._dedupe_keep_pdf(db, duplicate) is True
+        db.expire_all()
+        kept_original = db.get(Invoice, original.id)
+        kept_incoming = db.get(Invoice, duplicate.id)
+        assert kept_original is not None
+        assert kept_incoming is not None
+        assert kept_incoming.duplicate_of is None
+        assert kept_incoming.status == "review"
+        assert (uploads / original.stored_name).exists()
+        assert (uploads / duplicate.stored_name).exists()
+
+
+def test_mail_fetch_limit_keeps_newest_matching_uids():
+    values = b" ".join(str(index).encode() for index in range(1, 151))
+    selected = mail_service._latest_uid_values([values], 100)
+    assert selected[0] == b"51"
+    assert selected[-1] == b"150"
+    assert len(selected) == 100

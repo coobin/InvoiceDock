@@ -67,6 +67,7 @@ def _install_fake_client(
     def factory(**kwargs: Any) -> FakeClient:
         return FakeClient(selected_response, captured, **kwargs)
 
+    monkeypatch.setattr(notification_service, "validate_outbound_url", lambda url: url)
     monkeypatch.setattr(notification_service.httpx, "Client", factory)
     return captured
 

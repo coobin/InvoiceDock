@@ -23,8 +23,8 @@
         <input type="hidden" name="next" value="{{ next_path }}">
         <label>邮箱<input type="email" name="email" autocomplete="email" required autofocus placeholder="name@example.com"></label>
         <label>显示名称<input name="display_name" autocomplete="nickname" maxlength="160" placeholder="可选，默认取邮箱前缀"></label>
-        <label>密码<input type="password" name="password" autocomplete="new-password" required minlength="8" placeholder="至少 8 位，含字母和数字"></label>
-        <label>确认密码<input type="password" name="password_confirm" autocomplete="new-password" required placeholder="再次输入密码"></label>
+        <label>密码<input type="password" name="password" autocomplete="new-password" required minlength="12" maxlength="256" placeholder="至少 12 位，含字母和数字"></label>
+        <label>确认密码<input type="password" name="password_confirm" autocomplete="new-password" required minlength="12" maxlength="256" placeholder="再次输入密码"></label>
         <button class="button primary wide" type="submit">创建账号 <span>→</span></button>
       </form>
       <p class="login-alt">已有账号？<a href="/admin">返回登录</a></p>

@@ -64,10 +64,16 @@ def env_values() -> dict[str, str]:
     """Values provided via environment / .env. Non-empty values take
     precedence over database rows and are never written to the database."""
     settings = get_settings()
+    # ``BaseSettings`` keeps track of values that were explicitly supplied by
+    # the environment (including ``.env``) in ``model_fields_set``.  Looking
+    # only at the resolved value would incorrectly treat our non-empty model
+    # defaults as environment overrides and make matching database settings
+    # impossible to change from the admin page.
+    explicit_fields = set(getattr(settings, "model_fields_set", ()))
     return {
         key: str(getattr(settings, key))
         for key in INTEGRATION_DEFAULTS
-        if getattr(settings, key, "") not in (None, "")
+        if key in explicit_fields and getattr(settings, key, "") not in (None, "")
     }
 
 
@@ -149,9 +155,9 @@ def get_integrations(
     a user's own saved configuration overrides everything above it.
     """
     values = dict(INTEGRATION_DEFAULTS)
-    values.update(env_values())
     for key in INTEGRATION_DEFAULTS:
         values[key] = get_value(db, key, values[key])
+    values.update(env_values())
     if user_id:
         user_vals = _user_rows(db, user_id)
         for integration in USER_CONFIGURABLE_INTEGRATIONS:

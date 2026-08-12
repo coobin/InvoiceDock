@@ -122,7 +122,7 @@
   </dl>
   <form action="/integrations/oidc" method="post" class="oidc-toggle">
     <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
-    <label class="switch"><input type="checkbox" name="oidc_enabled" value="1" {{ 'checked' if oidc.toggle else '' }} onchange="this.form.submit()"><span></span><b>允许 OIDC 登录</b></label>
+    <label class="switch"><input type="checkbox" name="oidc_enabled" value="1" {{ 'checked' if oidc.toggle else '' }} data-auto-submit><span></span><b>允许 OIDC 登录</b></label>
   </form>
 </section>
 {% endif %}

@@ -35,13 +35,16 @@ class User(Base):
     oidc_subject: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
     role: Mapped[str] = mapped_column(String(20), default="member")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    session_version: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class Invoice(Base):
     __tablename__ = "invoices"
-    __table_args__ = (UniqueConstraint("sha256", name="uq_invoice_sha256"),)
+    __table_args__ = (
+        UniqueConstraint("owner_id", "sha256", name="uq_invoice_owner_sha256"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     original_name: Mapped[str] = mapped_column(String(255))
@@ -200,19 +203,31 @@ class JobLog(Base):
 
 
 class VerificationCache(Base):
-    """当天已通过发票云查验的发票号本地缓存。
+    """当天已通过发票云查验的租户级发票指纹缓存。
 
-    同一发票号在当天再次上传时直接复用查验结果，不再调用税务发票云，
-    避免消耗单张发票每日查验次数。每个 (发票号, 日期) 只保留一条记录。
+    只有同一用户上传的发票代码、号码、开票日期和价税合计均一致时，
+    才能复用查验结果，避免把另一用户或另一张发票的数据带入当前记录。
     """
 
     __tablename__ = "verification_caches"
     __table_args__ = (
-        UniqueConstraint("invoice_number", "verify_date", name="uq_verify_cache_number_date"),
+        UniqueConstraint(
+            "owner_id",
+            "invoice_code",
+            "invoice_number",
+            "invoice_date",
+            "total_amount",
+            "verify_date",
+            name="uq_verify_cache_owner_fingerprint_date",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    owner_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    invoice_code: Mapped[str] = mapped_column(String(40), default="")
     invoice_number: Mapped[str] = mapped_column(String(60), index=True)
+    invoice_date: Mapped[str] = mapped_column(String(20), default="")
+    total_amount: Mapped[str] = mapped_column(String(40), default="")
     verify_date: Mapped[str] = mapped_column(String(10), index=True)
     method: Mapped[str] = mapped_column(String(30), default="")
     fields: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
@@ -232,5 +247,26 @@ class TaxVerificationUsage(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     usage_date: Mapped[str] = mapped_column(String(10), index=True)
+    count: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class ResourceUsage(Base):
+    """Per-user daily counters for bounded upload, OCR and LLM usage."""
+
+    __tablename__ = "resource_usage"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "usage_date",
+            "resource",
+            name="uq_resource_usage_user_date_resource",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    usage_date: Mapped[str] = mapped_column(String(10), index=True)
+    resource: Mapped[str] = mapped_column(String(30), index=True)
     count: Mapped[int] = mapped_column(Integer, default=0)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)

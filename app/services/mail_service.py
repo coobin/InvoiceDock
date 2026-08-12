@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import email
 import imaplib
-import ipaddress
 import logging
 import re
-import socket
 import ssl
 from email.header import decode_header
 from email.message import Message
@@ -21,6 +19,7 @@ from app.db import SessionLocal
 from app.models import Invoice, JobLog, Mailbox, ProcessedEmail, utcnow
 from app.security import decrypt_secret
 from app.services.ingestion import ALLOWED_EXTENSIONS, extract_zip_candidates, ingest_bytes
+from app.services.network_security import validate_outbound_host, validate_outbound_url
 from app.services.settings_service import get_integrations
 from app.services.verifier import has_invoice_identity, process_invoice, provider_configured
 
@@ -45,6 +44,7 @@ def decode_mime_header(value: str | None) -> str:
 
 
 def _connect(mailbox: Mailbox) -> imaplib.IMAP4:
+    validate_outbound_host(mailbox.host, mailbox.port)
     password = decrypt_secret(mailbox.password_encrypted)
     if not password:
         raise RuntimeError("邮箱密码无法解密，请重新保存邮箱配置")
@@ -94,17 +94,8 @@ def _email_bodies(message: Message) -> list[str]:
 
 
 def _assert_public_url(url: str) -> None:
-    parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        raise ValueError("只允许 HTTP/HTTPS 公网链接")
-    try:
-        addresses = socket.getaddrinfo(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80))
-    except socket.gaierror as exc:
-        raise ValueError("链接域名无法解析") from exc
-    for address in addresses:
-        ip = ipaddress.ip_address(address[4][0])
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
-            raise ValueError("链接指向内网或保留地址，已阻止")
+    """Compatibility wrapper for callers/tests using the old helper name."""
+    validate_outbound_url(url)
 
 
 def fetch_direct_invoice(url: str) -> tuple[str, bytes] | None:
@@ -175,6 +166,10 @@ def _remove_email_invoice(db: Session, invoice, event: str, message: str) -> Non
     original = settings.upload_dir / invoice.stored_name
     preview = settings.preview_dir / f"{invoice.id}.jpg"
     db.add(JobLog(user_id=getattr(invoice, "owner_id", None), level="warning", event=event, message=message, details={"invoice_id": invoice.id}))
+    if hasattr(db, "scalars"):
+        for child in db.scalars(select(Invoice).where(Invoice.duplicate_of == invoice.id)).all():
+            child.duplicate_of = None
+            child.status = "verified" if child.verified_at else "review"
     db.delete(invoice)
     db.commit()
     original.unlink(missing_ok=True)
@@ -216,6 +211,23 @@ def _dedupe_keep_pdf(db: Session, invoice) -> bool:
     Returns True when the incoming record should remain in the ledger.
     """
     original = db.get(Invoice, invoice.duplicate_of) if invoice.duplicate_of else None
+    if original and original.owner_id != invoice.owner_id:
+        # Defense in depth for records produced by an older version: a
+        # duplicate relation is never allowed to cross tenant boundaries, and
+        # email cleanup must never delete another user's record or files.
+        invoice.duplicate_of = None
+        invoice.status = "verified" if invoice.verified_at else "review"
+        db.add(
+            JobLog(
+                user_id=invoice.owner_id,
+                level="warning",
+                event="email.reject_cross_owner_duplicate",
+                message=f"{invoice.original_name} 的跨用户重复关系已忽略",
+                details={"invoice_id": invoice.id},
+            )
+        )
+        db.commit()
+        return True
     if invoice.mime_type == "application/pdf":
         if original and original.mime_type != "application/pdf":
             # Release the self-referential foreign key before deleting the
@@ -250,6 +262,13 @@ def _dedupe_keep_pdf(db: Session, invoice) -> bool:
     return False
 
 
+def _latest_uid_values(search_data: list[bytes] | tuple[bytes, ...], limit: int) -> list[bytes]:
+    """Return the newest matching IMAP UIDs, preserving chronological order."""
+    values = (search_data[0] or b"").split() if search_data else []
+    bounded_limit = max(0, int(limit))
+    return values[-bounded_limit:] if bounded_limit else []
+
+
 def sync_mailbox(db: Session, mailbox: Mailbox) -> dict[str, int]:
     client = _connect(mailbox)
     imported = 0
@@ -262,7 +281,7 @@ def sync_mailbox(db: Session, mailbox: Mailbox) -> dict[str, int]:
         status, data = client.uid("search", None, f"UID {start_uid}:*")
         if status != "OK":
             raise RuntimeError("邮箱 UID 搜索失败")
-        uid_values = (data[0] or b"").split()[: get_settings().mail_fetch_limit]
+        uid_values = _latest_uid_values(data, get_settings().mail_fetch_limit)
         for uid_bytes in uid_values:
             uid = int(uid_bytes)
             max_uid = max(max_uid, uid)

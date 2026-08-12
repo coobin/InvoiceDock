@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import math
 import re
+import secrets
 import zipfile
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -27,6 +29,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -43,7 +46,10 @@ from app.security import (
     hash_password,
     is_reserved_username,
     mark_login,
+    password_policy_error,
     record_audit,
+    rotate_user_sessions,
+    start_user_session,
     throttle_limit,
     throttle_reset,
     validate_csrf,
@@ -52,6 +58,7 @@ from app.security import (
 from app.services.export_service import make_invoice_workbook, make_preview, make_print_pdf
 from app.services.ingestion import extract_zip_candidates, ingest_bytes
 from app.services.mail_service import scan_all_mailboxes, sync_mailbox, test_mailbox
+from app.services.network_security import validate_outbound_host
 from app.services.notification_service import (
     get_notification_settings,
     notify_event_background,
@@ -60,6 +67,7 @@ from app.services.notification_service import (
 )
 from app.services.quota_service import (
     get_tax_verify_daily_limit,
+    get_tax_verify_usage,
     set_tax_verify_daily_limit,
 )
 from app.services.settings_service import (
@@ -87,6 +95,8 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 logger = logging.getLogger(__name__)
+MAX_EXPORT_FILES = 500
+MAX_EXPORT_BYTES = 512 * 1024 * 1024
 scheduler = BackgroundScheduler(timezone=settings.tz)
 oauth = OAuth()
 if settings.oidc_enabled and settings.oidc_issuer and settings.oidc_client_id:
@@ -191,8 +201,9 @@ app = FastAPI(
     title="InvoiceDock API",
     description="自托管发票收集、查验、复核与打印工作台",
     version=__version__,
-    docs_url="/api/docs",
+    docs_url="/api/docs" if settings.enable_api_docs else None,
     redoc_url=None,
+    openapi_url="/openapi.json" if settings.enable_api_docs else None,
     lifespan=lifespan,
 )
 app.state.mail_interval = settings.mail_scan_interval_minutes
@@ -206,6 +217,28 @@ app.add_middleware(
 )
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):  # type: ignore[no-untyped-def]
+    response = await call_next(request)
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; "
+        "form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'"
+    )
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = (
+        "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+    )
+    if request.url.path != "/healthz" and not request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+    if settings.session_https_only:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
 
 
 STATUS_META = {
@@ -300,7 +333,7 @@ def owned_invoice(request: Request, db: Session, user: User, invoice_id: str) ->
     if not invoice:
         raise HTTPException(status_code=404, detail="发票不存在")
     if user.role != "admin" and invoice.owner_id != user.id:
-        raise HTTPException(status_code=403, detail="无权访问该发票")
+        raise HTTPException(status_code=404, detail="发票不存在")
     return invoice
 
 
@@ -309,7 +342,7 @@ def owned_mailbox(request: Request, db: Session, user: User, mailbox_id: str) ->
     if not mailbox:
         raise HTTPException(status_code=404, detail="邮箱不存在")
     if user.role != "admin" and mailbox.created_by != user.id:
-        raise HTTPException(status_code=403, detail="无权操作该邮箱")
+        raise HTTPException(status_code=404, detail="邮箱不存在")
     return mailbox
 
 
@@ -385,18 +418,43 @@ async def login_submit(
     form = await request.form()
     validate_csrf(request, str(form.get("csrf_token", "")))
     ip = client_ip(request)
-    if throttle_limit(f"login:{ip}", 10, 900):
+    username = str(form.get("username", "")).strip().lower()[:255]
+    ip_limited = throttle_limit(f"login-ip:{ip}", 10, 900)
+    account_limited = throttle_limit(f"login-account:{username}", 5, 900)
+    if ip_limited or account_limited:
+        record_audit(
+            db,
+            request,
+            None,
+            "auth.login_failed",
+            details={"reason": "rate_limited"},
+        )
         flash(request, "尝试次数过多，请 15 分钟后再试", "error")
         return RedirectResponse("/admin", status_code=303)
-    username = str(form.get("username", "")).strip().lower()
     password = str(form.get("password", ""))
     user = db.scalar(select(User).where(func.lower(User.username) == username))
-    if not user or not user.active or not verify_password(password, user.password_hash):
+    password_valid = (
+        len(username) <= 255
+        and len(password) <= settings.password_max_length
+        and bool(user)
+        and user.active
+        and verify_password(password, user.password_hash)
+    )
+    if not password_valid:
+        record_audit(
+            db,
+            request,
+            user,
+            "auth.login_failed",
+            "user",
+            str(user.id) if user else "",
+            {"reason": "invalid_credentials"},
+        )
         flash(request, "用户名或密码不正确", "error")
         return RedirectResponse("/admin", status_code=303)
-    throttle_reset(f"login:{ip}")
-    request.session.clear()
-    request.session["user_id"] = user.id
+    throttle_reset(f"login-ip:{ip}")
+    throttle_reset(f"login-account:{username}")
+    start_user_session(request, user)
     mark_login(user, db)
     record_audit(db, request, user, "auth.login")
     background_tasks.add_task(
@@ -443,11 +501,14 @@ async def register_submit(
         flash(request, "注册尝试过于频繁，请稍后再试", "error")
         return RedirectResponse("/register", status_code=303)
     email = str(form.get("email", "")).strip().lower()
-    display_name = str(form.get("display_name", "")).strip()[:160]
+    display_name = str(form.get("display_name", "")).strip()
     password = str(form.get("password", ""))
     confirm = str(form.get("password_confirm", ""))
-    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+    if len(email) > 255 or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
         flash(request, "请输入有效的邮箱地址", "error")
+        return RedirectResponse("/register", status_code=303)
+    if len(display_name) > 160:
+        flash(request, "显示名称不能超过 160 个字符", "error")
         return RedirectResponse("/register", status_code=303)
     if is_reserved_username(email):
         flash(request, "该邮箱前缀为系统保留用户名，请更换邮箱", "error")
@@ -455,11 +516,12 @@ async def register_submit(
     if display_name and is_reserved_username(display_name):
         flash(request, "该显示名称为系统保留名称，请更换名称", "error")
         return RedirectResponse("/register", status_code=303)
-    if len(password) < settings.registration_min_password_length:
-        flash(request, f"密码至少需要 {settings.registration_min_password_length} 位", "error")
+    if len(password) > settings.password_max_length:
+        flash(request, f"密码不能超过 {settings.password_max_length} 个字符", "error")
         return RedirectResponse("/register", status_code=303)
-    if not re.search(r"[A-Za-z]", password) or not re.search(r"\d", password):
-        flash(request, "密码需要同时包含字母和数字", "error")
+    password_error = password_policy_error(password, settings.registration_min_password_length)
+    if password_error:
+        flash(request, password_error, "error")
         return RedirectResponse("/register", status_code=303)
     if password != confirm:
         flash(request, "两次输入的密码不一致", "error")
@@ -478,7 +540,12 @@ async def register_submit(
         role="member",
     )
     db.add(user)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        flash(request, "该邮箱已注册，请直接登录", "error")
+        return RedirectResponse("/register", status_code=303)
     record_audit(db, request, None, "auth.register", details={"username": email})
     background_tasks.add_task(
         notify_event_background,
@@ -488,6 +555,137 @@ async def register_submit(
     )
     flash(request, "注册成功，请用邮箱和密码登录")
     return RedirectResponse("/admin", status_code=303)
+
+
+class OIDCLoginDenied(Exception):
+    def __init__(self, message: str, reason: str):
+        super().__init__(message)
+        self.message = message
+        self.reason = reason
+
+
+def _oidc_email(claims: dict) -> str:
+    verified = claims.get("email_verified") is True or (
+        isinstance(claims.get("email_verified"), str)
+        and claims["email_verified"].strip().lower() == "true"
+    )
+    candidate = str(claims.get("email") or "").strip().lower()
+    if (
+        not verified
+        or len(candidate) > 255
+        or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", candidate)
+    ):
+        return ""
+    return candidate
+
+
+def _oidc_groups(claims: dict) -> list[str]:
+    value = claims.get(settings.oidc_group_claim, []) or []
+    if isinstance(value, str):
+        return [value]
+    return [str(item) for item in value] if isinstance(value, (list, tuple, set)) else []
+
+
+def _oidc_user_for_claims(db: Session, claims: dict) -> tuple[User, bool]:
+    """Resolve an OIDC identity without ever linking it by email.
+
+    The issuer + subject pair is the sole binding key. A verified email is
+    retained as an attribute and checked for collisions, but an existing local
+    account must be linked explicitly by an administrator outside this flow.
+    """
+    subject = str(claims.get("sub") or "").strip()
+    if not subject:
+        raise OIDCLoginDenied("OIDC 未返回有效的身份标识", "missing_subject")
+    oidc_subject = f"{settings.oidc_issuer}|{subject}"
+    verified_email = _oidc_email(claims)
+    if settings.oidc_domains:
+        if not verified_email:
+            raise OIDCLoginDenied("身份提供商尚未验证邮箱，无法完成登录", "email_unverified")
+        if verified_email.rsplit("@", 1)[-1] not in settings.oidc_domains:
+            raise OIDCLoginDenied("该邮箱域名未获授权", "domain_not_allowed")
+
+    user = db.scalar(select(User).where(User.oidc_subject == oidc_subject))
+    if verified_email:
+        collision_query = select(User).where(
+            or_(
+                func.lower(User.email) == verified_email,
+                func.lower(User.username) == verified_email,
+            )
+        )
+        if user:
+            collision_query = collision_query.where(User.id != user.id)
+        collision = db.scalar(collision_query)
+        if collision:
+            raise OIDCLoginDenied(
+                "该邮箱已属于本地账号，系统不会自动绑定；请联系管理员显式处理",
+                "local_email_conflict",
+            )
+
+    groups = _oidc_groups(claims)
+    desired_role = (
+        "admin"
+        if settings.oidc_admin_group and settings.oidc_admin_group in groups
+        else "member"
+    )
+    if user:
+        if not user.active:
+            raise OIDCLoginDenied("该账号已停用，请联系管理员", "inactive")
+        security_state_changed = False
+        if user.role != desired_role:
+            user.role = desired_role
+            security_state_changed = True
+        # OIDC-bound users are OIDC-only. Clearing a legacy local password
+        # closes accounts silently bound by older vulnerable releases.
+        if user.password_hash:
+            user.password_hash = None
+            security_state_changed = True
+        if security_state_changed:
+            rotate_user_sessions(user)
+        if verified_email:
+            user.email = verified_email
+        display_name = str(
+            claims.get("name") or claims.get("preferred_username") or user.display_name
+        ).strip()
+        if display_name:
+            user.display_name = display_name[:160]
+        db.commit()
+        return user, False
+
+    preferred = str(claims.get("preferred_username") or "").strip()
+    raw_email = str(claims.get("email") or "").strip().lower()
+    if not verified_email and ("@" in preferred or preferred.casefold() == raw_email.casefold()):
+        preferred = ""
+    display_name = str(claims.get("name") or preferred or "").strip()
+    for value in (preferred, verified_email, display_name):
+        if value and is_reserved_username(value):
+            raise OIDCLoginDenied(
+                "OIDC 返回了系统保留名称，请联系管理员处理",
+                "reserved_username",
+            )
+
+    username_base = (preferred or verified_email or f"oidc-{secrets.token_hex(6)}")[:120]
+    username = username_base
+    suffix = 1
+    while db.scalar(select(User.id).where(func.lower(User.username) == username.lower())):
+        suffix += 1
+        username = f"{username_base[: 119 - len(str(suffix))]}-{suffix}"
+    user = User(
+        username=username,
+        email=verified_email,
+        display_name=(display_name or username)[:160],
+        oidc_subject=oidc_subject,
+        role=desired_role,
+    )
+    db.add(user)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise OIDCLoginDenied(
+            "OIDC 账号创建发生冲突，请联系管理员处理",
+            "identity_conflict",
+        ) from exc
+    return user, True
 
 
 @app.get("/auth/oidc/login")
@@ -532,55 +730,28 @@ async def oidc_callback(
         if userinfo:
             claims.update(userinfo)
     except OAuthError as exc:
+        record_audit(
+            db,
+            request,
+            None,
+            "auth.oidc_login_failed",
+            details={"reason": "provider_error"},
+        )
         flash(request, f"OIDC 登录失败：{exc.error}", "error")
         return RedirectResponse("/admin", status_code=303)
-    subject = str(claims.get("sub", ""))
-    email_address = str(claims.get("email", "")).lower()
-    if not subject:
-        raise HTTPException(status_code=403, detail="OIDC 未返回 sub")
-    if settings.oidc_domains:
-        domain = email_address.rsplit("@", 1)[-1] if "@" in email_address else ""
-        if domain not in settings.oidc_domains:
-            raise HTTPException(status_code=403, detail="该邮箱域名未获授权")
-    oidc_subject = f"{settings.oidc_issuer}|{subject}"
-    user = db.scalar(select(User).where(User.oidc_subject == oidc_subject))
-    if not user and email_address:
-        user = db.scalar(select(User).where(User.email == email_address))
-    groups = claims.get(settings.oidc_group_claim, []) or []
-    if isinstance(groups, str):
-        groups = [groups]
-    is_admin = bool(settings.oidc_admin_group and settings.oidc_admin_group in groups)
-    created_user = not user
-    if not user:
-        username_base = str(claims.get("preferred_username") or email_address or f"oidc-{subject}")[:100]
-        username = username_base
-        suffix = 1
-        while db.scalar(select(User.id).where(User.username == username)):
-            suffix += 1
-            username = f"{username_base[:110]}-{suffix}"
-        user = User(
-            username=username,
-            email=email_address,
-            display_name=str(claims.get("name") or claims.get("preferred_username") or username),
-            oidc_subject=oidc_subject,
-            role="admin" if is_admin else "member",
+    try:
+        user, created_user = _oidc_user_for_claims(db, claims)
+    except OIDCLoginDenied as exc:
+        record_audit(
+            db,
+            request,
+            None,
+            "auth.oidc_login_failed",
+            details={"reason": exc.reason},
         )
-        db.add(user)
-    else:
-        user.oidc_subject = oidc_subject
-        user.display_name = str(claims.get("name") or claims.get("preferred_username") or user.display_name)
-        if email_address:
-            user.email = email_address
-        new_username = str(claims.get("preferred_username") or "")
-        if new_username and new_username != user.username:
-            taken = db.scalar(select(User.id).where(User.username == new_username, User.id != user.id))
-            if not taken:
-                user.username = new_username
-        if is_admin:
-            user.role = "admin"
-    db.commit()
-    request.session.clear()
-    request.session["user_id"] = user.id
+        flash(request, exc.message, "error")
+        return RedirectResponse("/admin", status_code=303)
+    start_user_session(request, user)
     mark_login(user, db)
     record_audit(db, request, user, "auth.oidc_login")
     if created_user:
@@ -628,11 +799,20 @@ async def change_password(request: Request, db: Session = Depends(get_db)):
     current_password = str(form.get("current_password", ""))
     new_password = str(form.get("new_password", ""))
     confirm_password = str(form.get("confirm_password", ""))
-    if not user.password_hash or not verify_password(current_password, user.password_hash):
+    if (
+        len(current_password) > settings.password_max_length
+        or not user.password_hash
+        or not verify_password(current_password, user.password_hash)
+    ):
+        record_audit(db, request, user, "auth.password_change_failed", "user", str(user.id))
         flash(request, "当前密码不正确", "error")
         return RedirectResponse("/profile", status_code=303)
-    if len(new_password) < 12:
-        flash(request, "新密码至少需要 12 个字符", "error")
+    if len(new_password) > settings.password_max_length:
+        flash(request, f"新密码不能超过 {settings.password_max_length} 个字符", "error")
+        return RedirectResponse("/profile", status_code=303)
+    password_error = password_policy_error(new_password, settings.registration_min_password_length)
+    if password_error:
+        flash(request, password_error, "error")
         return RedirectResponse("/profile", status_code=303)
     if new_password != confirm_password:
         flash(request, "两次输入的新密码不一致", "error")
@@ -641,8 +821,10 @@ async def change_password(request: Request, db: Session = Depends(get_db)):
         flash(request, "新密码不能与当前密码相同", "error")
         return RedirectResponse("/profile", status_code=303)
     user.password_hash = hash_password(new_password)
+    rotate_user_sessions(user)
     db.commit()
     record_audit(db, request, user, "auth.password_changed", "user", str(user.id))
+    start_user_session(request, user)
     flash(request, "密码已更新")
     return RedirectResponse("/profile", status_code=303)
 
@@ -727,6 +909,8 @@ def invoice_detail(invoice_id: str, request: Request, db: Session = Depends(get_
     user = require_page_user(request, db)
     invoice = owned_invoice(request, db, user, invoice_id)
     duplicate = db.get(Invoice, invoice.duplicate_of) if invoice.duplicate_of else None
+    if duplicate and user.role != "admin" and duplicate.owner_id != user.id:
+        duplicate = None
     return templates.TemplateResponse(
         request,
         "invoice_detail.html",
@@ -835,7 +1019,15 @@ async def save_invoice(invoice_id: str, request: Request, db: Session = Depends(
                 setattr(invoice, field, str(form.get(field, "")).strip())
         for field in ("amount", "tax_amount", "total_amount"):
             raw = str(form.get(field, "")).strip()
-            setattr(invoice, field, round(float(raw), 2) if raw else None)
+            try:
+                value = float(raw) if raw else None
+            except ValueError:
+                flash(request, "金额字段必须是有效数字", "error")
+                return RedirectResponse(f"/invoices/{invoice.id}", status_code=303)
+            if value is not None and (not math.isfinite(value) or abs(value) > 1_000_000_000):
+                flash(request, "金额超出有效范围", "error")
+                return RedirectResponse(f"/invoices/{invoice.id}", status_code=303)
+            setattr(invoice, field, round(value, 2) if value is not None else None)
     invoice.status = "reviewed"
     invoice.verified_at = utcnow()
     db.commit()
@@ -853,6 +1045,9 @@ async def delete_invoice(invoice_id: str, request: Request, db: Session = Depend
     original = settings.upload_dir / invoice.stored_name
     preview = settings.preview_dir / f"{invoice.id}.jpg"
     record_audit(db, request, user, "invoice.delete", "invoice", invoice.id, {"filename": invoice.original_name})
+    for child in db.scalars(select(Invoice).where(Invoice.duplicate_of == invoice.id)).all():
+        child.duplicate_of = None
+        child.status = "verified" if child.verified_at else "review"
     db.delete(invoice)
     db.commit()
     original.unlink(missing_ok=True)
@@ -874,6 +1069,12 @@ async def invoices_batch_delete(request: Request, db: Session = Depends(get_db))
     if not invoices:
         flash(request, "未找到可删除的发票", "error")
         return RedirectResponse("/invoices", status_code=303)
+    selected = {invoice.id for invoice in invoices}
+    children = db.scalars(select(Invoice).where(Invoice.duplicate_of.in_(selected))).all()
+    for child in children:
+        if child.id not in selected:
+            child.duplicate_of = None
+            child.status = "verified" if child.verified_at else "review"
     for invoice in invoices:
         original = settings.upload_dir / invoice.stored_name
         preview = settings.preview_dir / f"{invoice.id}.jpg"
@@ -901,6 +1102,11 @@ def export_invoice_files(
     invoices = list(db.scalars(query).all())
     if not invoices:
         raise HTTPException(status_code=404, detail="没有可导出的发票")
+    if len(invoices) > MAX_EXPORT_FILES:
+        raise HTTPException(status_code=400, detail=f"单次最多导出 {MAX_EXPORT_FILES} 个文件")
+    export_size = sum(max(0, invoice.file_size) for invoice in invoices)
+    if export_size > MAX_EXPORT_BYTES:
+        raise HTTPException(status_code=400, detail="单次导出文件总量不能超过 512 MB")
     buffer = BytesIO()
     used: set[str] = set()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
@@ -974,16 +1180,31 @@ async def create_mailbox(request: Request, db: Session = Depends(get_db)):
     form = await request.form()
     validate_csrf(request, str(form.get("csrf_token", "")))
     password = str(form.get("password", ""))
-    if not password:
-        flash(request, "邮箱授权码不能为空", "error")
+    if not password or len(password) > 1024:
+        flash(request, "邮箱授权码不能为空且不能超过 1024 个字符", "error")
+        return RedirectResponse("/mailboxes", status_code=303)
+    name = str(form.get("name", "")).strip()[:120]
+    host = str(form.get("host", "")).strip()[:255]
+    username = str(form.get("username", "")).strip()[:255]
+    folder = str(form.get("folder", "INBOX")).strip()[:255] or "INBOX"
+    try:
+        port = int(str(form.get("port", "993")))
+        if port not in {143, 993}:
+            raise ValueError("IMAP 端口仅允许 143 或 993")
+        validate_outbound_host(host, port)
+    except ValueError as exc:
+        flash(request, f"邮箱服务器配置无效：{exc}", "error")
+        return RedirectResponse("/mailboxes", status_code=303)
+    if not name or not username:
+        flash(request, "邮箱名称和账号不能为空", "error")
         return RedirectResponse("/mailboxes", status_code=303)
     mailbox = Mailbox(
-        name=str(form.get("name", "")).strip(),
-        host=str(form.get("host", "")).strip(),
-        port=int(str(form.get("port", "993"))),
-        username=str(form.get("username", "")).strip(),
+        name=name,
+        host=host,
+        port=port,
+        username=username,
         password_encrypted=encrypt_secret(password),
-        folder=str(form.get("folder", "INBOX")).strip() or "INBOX",
+        folder=folder,
         use_ssl=str(form.get("use_ssl", "")) == "on",
         enabled=True,
         created_by=user.id,
@@ -1001,6 +1222,9 @@ async def mailbox_test(mailbox_id: str, request: Request, db: Session = Depends(
     form = await request.form()
     validate_csrf(request, str(form.get("csrf_token", "")))
     mailbox = owned_mailbox(request, db, user, mailbox_id)
+    if throttle_limit(f"mailbox-test:{user.id}", 10, 900):
+        flash(request, "邮箱连接测试过于频繁，请稍后再试", "error")
+        return RedirectResponse("/mailboxes", status_code=303)
     try:
         result = test_mailbox(mailbox)
         flash(request, f"连接成功：{result}")
@@ -1016,6 +1240,9 @@ async def mailbox_sync(mailbox_id: str, request: Request, background_tasks: Back
     form = await request.form()
     validate_csrf(request, str(form.get("csrf_token", "")))
     mailbox = owned_mailbox(request, db, user, mailbox_id)
+    if throttle_limit(f"mailbox-sync:{user.id}", 10, 900):
+        flash(request, "邮箱收取过于频繁，请稍后再试", "error")
+        return RedirectResponse("/mailboxes", status_code=303)
     background_tasks.add_task(sync_mailbox_task, mailbox_id)
     background_tasks.add_task(
         notify_event_background,
@@ -1231,6 +1458,9 @@ async def integration_test(provider: str, request: Request, db: Session = Depend
     user = require_page_user(request, db)
     form = await request.form()
     validate_csrf(request, str(form.get("csrf_token", "")))
+    if throttle_limit(f"integration-test:{user.id}", 10, 900):
+        flash(request, "集成测试过于频繁，请稍后再试", "error")
+        return RedirectResponse("/integrations", status_code=303)
     if user.role != "admin" and provider != "llm":
         raise HTTPException(status_code=403, detail="普通用户只能测试自己的 LLM 配置")
     config = get_integrations(db, user_id=None if user.role == "admin" else user.id)
@@ -1324,7 +1554,13 @@ async def print_generate(
     form = await request.form()
     validate_csrf(request, str(form.get("csrf_token", "")))
     ids = [str(value) for value in form.getlist("invoice_ids")]
-    per_page = int(str(form.get("per_page", "2")))
+    try:
+        per_page = int(str(form.get("per_page", "2")))
+    except ValueError:
+        per_page = 0
+    if per_page not in {1, 2, 4}:
+        flash(request, "每页数量只支持 1、2 或 4", "error")
+        return RedirectResponse("/print", status_code=303)
     query = select(Invoice).where(Invoice.id.in_(ids))
     if user.role != "admin":
         query = query.where(Invoice.owner_id == user.id)
@@ -1380,3 +1616,156 @@ def audit_page(request: Request, db: Session = Depends(get_db)):
     items = list(db.scalars(select(AuditLog).order_by(AuditLog.created_at.desc()).limit(200)).all())
     users = {item.id: item for item in db.scalars(select(User)).all()}
     return templates.TemplateResponse(request, "audit.html", context(request, user, page="audit", items=items, users=users))
+
+
+def _admin_target(db: Session, user_id: str) -> User:
+    target = db.get(User, user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    return target
+
+
+def _active_admin_count(db: Session) -> int:
+    return int(
+        db.scalar(
+            select(func.count()).select_from(User).where(
+                User.role == "admin",
+                User.active.is_(True),
+            )
+        )
+        or 0
+    )
+
+
+@app.get("/admin/users", response_class=HTMLResponse)
+def admin_users_page(request: Request, db: Session = Depends(get_db)):
+    user = require_page_admin(request, db)
+    users = list(db.scalars(select(User).order_by(User.created_at.desc())).all())
+    daily_limit = get_tax_verify_daily_limit(db)
+    usage = {item.id: get_tax_verify_usage(db, item.id) for item in users}
+    return templates.TemplateResponse(
+        request,
+        "admin_users.html",
+        context(
+            request,
+            user,
+            page="admin_users",
+            users=users,
+            usage=usage,
+            daily_limit=daily_limit,
+            password_max_length=settings.password_max_length,
+        ),
+    )
+
+
+@app.post("/admin/users/{user_id}/active")
+async def admin_user_toggle_active(
+    user_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    actor = require_page_admin(request, db)
+    form = await request.form()
+    validate_csrf(request, str(form.get("csrf_token", "")))
+    target = _admin_target(db, user_id)
+    if target.id == actor.id:
+        flash(request, "不能停用自己的管理员账号", "error")
+        return RedirectResponse("/admin/users", status_code=303)
+    if target.active and target.role == "admin" and _active_admin_count(db) <= 1:
+        flash(request, "必须保留至少一个可用管理员", "error")
+        return RedirectResponse("/admin/users", status_code=303)
+    target.active = not target.active
+    rotate_user_sessions(target)
+    db.commit()
+    record_audit(
+        db,
+        request,
+        actor,
+        "user.active_changed",
+        "user",
+        target.id,
+        {"active": target.active},
+    )
+    flash(request, f"已{'启用' if target.active else '停用'}用户 {target.username}")
+    return RedirectResponse("/admin/users", status_code=303)
+
+
+@app.post("/admin/users/{user_id}/role")
+async def admin_user_change_role(
+    user_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    actor = require_page_admin(request, db)
+    form = await request.form()
+    validate_csrf(request, str(form.get("csrf_token", "")))
+    target = _admin_target(db, user_id)
+    desired_role = str(form.get("role", ""))
+    if desired_role not in {"admin", "member"}:
+        raise HTTPException(status_code=400, detail="无效的用户角色")
+    if target.id == actor.id:
+        flash(request, "不能修改自己的管理员角色", "error")
+        return RedirectResponse("/admin/users", status_code=303)
+    if target.oidc_subject:
+        flash(request, "OIDC 用户角色由身份提供商的管理员组同步", "error")
+        return RedirectResponse("/admin/users", status_code=303)
+    if (
+        target.role == "admin"
+        and desired_role == "member"
+        and target.active
+        and _active_admin_count(db) <= 1
+    ):
+        flash(request, "必须保留至少一个可用管理员", "error")
+        return RedirectResponse("/admin/users", status_code=303)
+    previous_role = target.role
+    if previous_role != desired_role:
+        target.role = desired_role
+        rotate_user_sessions(target)
+        db.commit()
+        record_audit(
+            db,
+            request,
+            actor,
+            "user.role_changed",
+            "user",
+            target.id,
+            {"from": previous_role, "to": desired_role},
+        )
+    flash(request, f"已将 {target.username} 设为{'管理员' if desired_role == 'admin' else '成员'}")
+    return RedirectResponse("/admin/users", status_code=303)
+
+
+@app.post("/admin/users/{user_id}/password")
+async def admin_user_reset_password(
+    user_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    actor = require_page_admin(request, db)
+    form = await request.form()
+    validate_csrf(request, str(form.get("csrf_token", "")))
+    target = _admin_target(db, user_id)
+    if target.id == actor.id:
+        flash(request, "请在“账户安全”页面修改自己的密码", "error")
+        return RedirectResponse("/admin/users", status_code=303)
+    if target.oidc_subject:
+        flash(request, "OIDC 用户不使用本地密码，请在身份提供商中重置", "error")
+        return RedirectResponse("/admin/users", status_code=303)
+    password = str(form.get("password", ""))
+    confirm = str(form.get("password_confirm", ""))
+    if len(password) > settings.password_max_length:
+        flash(request, f"密码不能超过 {settings.password_max_length} 个字符", "error")
+        return RedirectResponse("/admin/users", status_code=303)
+    password_error = password_policy_error(password, settings.registration_min_password_length)
+    if password_error:
+        flash(request, password_error, "error")
+        return RedirectResponse("/admin/users", status_code=303)
+    if password != confirm:
+        flash(request, "两次输入的新密码不一致", "error")
+        return RedirectResponse("/admin/users", status_code=303)
+    target.password_hash = hash_password(password)
+    rotate_user_sessions(target)
+    db.commit()
+    record_audit(db, request, actor, "user.password_reset", "user", target.id)
+    flash(request, f"已重置 {target.username} 的本地密码，旧会话已全部失效")
+    return RedirectResponse("/admin/users", status_code=303)

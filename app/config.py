@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from ipaddress import IPv4Network, IPv6Network, ip_network
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,6 +17,10 @@ class Settings(BaseSettings):
     data_dir: Path = Path("./data")
     database_url: str = "sqlite:///./data/invoicedock.db"
     session_https_only: bool = False
+    enable_api_docs: bool = False
+    # Only requests received directly from these proxy IPs/networks may supply
+    # X-Forwarded-For. Keep empty when the application is exposed directly.
+    trusted_proxy_ips: str = ""
 
     admin_username: str = "kay"
     admin_password: str = "change-me-now"
@@ -33,11 +38,25 @@ class Settings(BaseSettings):
     # 邮箱 + 密码自助注册。部署方可在 .env 中关闭（false）后仅保留
     # 管理员/邀请制账户。注册账户默认为普通成员，密码使用 Argon2 哈希。
     registration_enabled: bool = True
-    registration_min_password_length: int = 8
+    registration_min_password_length: int = 12
+    password_max_length: int = 256
     # Comma-separated additions to the built-in reserved username list.
     reserved_usernames: str = ""
 
     max_upload_mb: int = 25
+    max_user_storage_mb: int = 2048
+    max_user_daily_upload_files: int = 200
+    max_user_daily_ocr: int = 200
+    max_user_daily_llm: int = 100
+    max_concurrent_jobs_per_user: int = 2
+    max_concurrent_processing_jobs: int = 4
+    max_archive_files: int = 30
+    max_archive_uncompressed_mb: int = 80
+    max_ofd_files: int = 200
+    max_ofd_uncompressed_mb: int = 100
+    # Comma-separated hostnames/IPs that are deliberately allowed even when
+    # they resolve to a private/link-local address.
+    outbound_private_host_allowlist: str = ""
     mail_scan_interval_minutes: int = 10
     mail_fetch_limit: int = 100
     tz: str = "Asia/Shanghai"
@@ -89,6 +108,39 @@ class Settings(BaseSettings):
     def trim_urls(cls, value: str) -> str:
         return value.rstrip("/")
 
+    @field_validator(
+        "max_upload_mb",
+        "max_user_storage_mb",
+        "max_user_daily_upload_files",
+        "max_user_daily_ocr",
+        "max_user_daily_llm",
+        "max_concurrent_jobs_per_user",
+        "max_concurrent_processing_jobs",
+        "max_archive_files",
+        "max_archive_uncompressed_mb",
+        "max_ofd_files",
+        "max_ofd_uncompressed_mb",
+    )
+    @classmethod
+    def validate_resource_limits(cls, value: int, info: ValidationInfo) -> int:
+        upper_bounds = {
+            "max_upload_mb": 1024,
+            "max_user_storage_mb": 1_048_576,
+            "max_user_daily_upload_files": 1_000_000,
+            "max_user_daily_ocr": 1_000_000,
+            "max_user_daily_llm": 1_000_000,
+            "max_concurrent_jobs_per_user": 128,
+            "max_concurrent_processing_jobs": 512,
+            "max_archive_files": 10_000,
+            "max_archive_uncompressed_mb": 102_400,
+            "max_ofd_files": 10_000,
+            "max_ofd_uncompressed_mb": 102_400,
+        }
+        maximum = upper_bounds[info.field_name]
+        if not 1 <= value <= maximum:
+            raise ValueError(f"{info.field_name} must be between 1 and {maximum}")
+        return value
+
     @property
     def upload_dir(self) -> Path:
         return self.data_dir / "uploads"
@@ -108,6 +160,21 @@ class Settings(BaseSettings):
     @property
     def additional_reserved_usernames(self) -> set[str]:
         return {item.strip() for item in self.reserved_usernames.split(",") if item.strip()}
+
+    @property
+    def trusted_proxy_networks(self) -> tuple[IPv4Network | IPv6Network, ...]:
+        networks: list[IPv4Network | IPv6Network] = []
+        for item in self.trusted_proxy_ips.split(","):
+            value = item.strip()
+            if not value:
+                continue
+            try:
+                networks.append(ip_network(value, strict=False))
+            except ValueError:
+                # Invalid entries are deliberately ignored instead of making
+                # the service trust an unexpectedly broad source.
+                continue
+        return tuple(networks)
 
 
 @lru_cache

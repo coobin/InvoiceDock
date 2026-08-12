@@ -7,6 +7,7 @@ from starlette.requests import Request
 from app.db import Base
 from app.main import _dashboard_job_logs, app, integrations_page
 from app.models import JobLog, User
+from app.security import session_auth_marker
 
 
 def _factory(tmp_path):
@@ -28,7 +29,10 @@ def _request(user: User, path: str = "/integrations") -> Request:
             "headers": [],
             "client": ("127.0.0.1", 1),
             "server": ("testserver", 443),
-            "session": {"user_id": user.id},
+            "session": {
+                "user_id": user.id,
+                "auth_marker": session_auth_marker(user),
+            },
             "app": app,
             "router": app.router,
         }

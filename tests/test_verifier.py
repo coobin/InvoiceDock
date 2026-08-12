@@ -1,6 +1,12 @@
 from types import SimpleNamespace
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+
+from app.db import Base
+from app.models import Invoice, User
 from app.services.verifier import (
+    _find_business_duplicate,
     _provider_fields_valid,
     compare_sources,
     has_invoice_identity,
@@ -90,3 +96,45 @@ def test_kingdee_alias_mapping():
     assert fields["invoice_number"] == "24500000123456789012"
     assert fields["seller_name"] == "销售方"
     assert fields["total_amount"] == 99.8
+
+
+def test_business_duplicate_search_never_crosses_owner(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'business-dedup.db'}")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        first_user = User(username="first-owner", email="first-owner@example.com")
+        second_user = User(username="second-owner", email="second-owner@example.com")
+        db.add_all([first_user, second_user])
+        db.flush()
+        first = Invoice(
+            original_name="first.pdf",
+            stored_name="first.pdf",
+            sha256="1" * 64,
+            owner_id=first_user.id,
+            invoice_code="044001",
+            invoice_number="12345678",
+        )
+        cross_owner = Invoice(
+            original_name="second.pdf",
+            stored_name="second.pdf",
+            sha256="2" * 64,
+            owner_id=second_user.id,
+            invoice_code="044001",
+            invoice_number="12345678",
+        )
+        db.add_all([first, cross_owner])
+        db.commit()
+
+        assert _find_business_duplicate(cross_owner, db) is None
+
+        same_owner = Invoice(
+            original_name="second-copy.pdf",
+            stored_name="second-copy.pdf",
+            sha256="3" * 64,
+            owner_id=second_user.id,
+            invoice_code="044001",
+            invoice_number="12345678",
+        )
+        db.add(same_owner)
+        db.commit()
+        assert _find_business_duplicate(same_owner, db).id == cross_owner.id

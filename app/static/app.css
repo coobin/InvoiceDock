@@ -462,6 +462,12 @@ label input, label select, label textarea { display: block; margin-top: 5px; col
 .audit-table { min-width: 900px; }
 .audit-action { color: var(--carbon); font: 700 9px var(--font-mono); }
 .audit-table code { display: block; max-width: 330px; overflow: hidden; color: #5d7180; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.admin-user-table { min-width: 980px; }
+.admin-user-actions { min-width: 290px; }
+.admin-user-actions .row-actions { display: flex; flex-wrap: wrap; gap: 7px; text-align: left; white-space: normal; }
+.password-reset { margin-top: 9px; }
+.password-reset summary { width: max-content; cursor: pointer; color: var(--carbon); font-size: 9px; font-weight: 700; }
+.password-reset .form-stack { max-width: 330px; padding: 10px; margin-top: 7px; background: #f5f8f9; border: 1px solid var(--rule); border-radius: 5px; }
 .error-page { display: grid; min-height: 75vh; place-content: center; text-align: center; }
 .error-page > span { color: transparent; font: 700 130px/1 var(--font-display); -webkit-text-stroke: 2px var(--rule-dark); }
 .error-page h1 { margin: 10px 0 4px; font-size: 28px; }

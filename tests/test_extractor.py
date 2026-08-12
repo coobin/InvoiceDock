@@ -1,4 +1,16 @@
-from app.services.extractor import categorize, extract_xml_text, parse_invoice_fields
+import zipfile
+from io import BytesIO
+from types import SimpleNamespace
+
+import pytest
+
+from app.services import extractor
+from app.services.extractor import (
+    categorize,
+    extract_ofd_text,
+    extract_xml_text,
+    parse_invoice_fields,
+)
 
 
 def test_parse_common_vat_invoice_fields():
@@ -47,3 +59,37 @@ def test_categorize_expanded_keywords():
     assert categorize("话费充值", "中国移动通信") == "通讯"
     assert categorize("会议餐饮费", "某会议中心") == "餐饮"
     assert categorize("某服务费", "无关公司") == "未分类"
+
+
+def _write_ofd(path, files: dict[str, bytes]) -> None:
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_STORED) as archive:
+        for name, data in files.items():
+            archive.writestr(name, data)
+    path.write_bytes(buffer.getvalue())
+
+
+def test_extract_ofd_rejects_excessive_file_count(tmp_path, monkeypatch):
+    path = tmp_path / "many.ofd"
+    _write_ofd(path, {f"Doc_{index}.xml": b"<a>ok</a>" for index in range(3)})
+    monkeypatch.setattr(
+        extractor,
+        "get_settings",
+        lambda: SimpleNamespace(max_ofd_files=2, max_ofd_uncompressed_mb=1),
+    )
+
+    with pytest.raises(ValueError, match="文件数量"):
+        extract_ofd_text(path)
+
+
+def test_extract_ofd_rejects_excessive_uncompressed_size(tmp_path, monkeypatch):
+    path = tmp_path / "large.ofd"
+    _write_ofd(path, {"Doc_0.xml": b"<a>" + b"x" * (1024 * 1024) + b"</a>"})
+    monkeypatch.setattr(
+        extractor,
+        "get_settings",
+        lambda: SimpleNamespace(max_ofd_files=10, max_ofd_uncompressed_mb=1),
+    )
+
+    with pytest.raises(ValueError, match="解压后大小"):
+        extract_ofd_text(path)

@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}用户管理 · {{ app_name }}{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div><span class="eyebrow">ACCESS CONTROL / 用户管理</span><h1>账号与访问权限</h1><p>停用账号、同步角色、查看今日验票用量，或重置本地账号密码。所有变更都会写入审计记录。</p></div>
+</header>
+<section class="table-panel">
+  <table class="data-table admin-user-table">
+    <thead><tr><th>用户</th><th>登录方式</th><th>角色 / 状态</th><th>最近登录</th><th>今日验票</th><th>管理</th></tr></thead>
+    <tbody>
+    {% for item in users %}
+      <tr>
+        <td><strong>{{ item.display_name or item.username }}</strong><small class="mono">{{ item.username }}</small><small>{{ item.email or '未设置邮箱' }}</small></td>
+        <td>{{ 'OIDC' if item.oidc_subject else '本地密码' }}</td>
+        <td><span class="status {{ 'verified' if item.active else 'failed' }}">{{ '启用' if item.active else '已停用' }}</span><small>{{ '管理员' if item.role == 'admin' else '成员' }}</small></td>
+        <td class="mono">{{ item.last_login_at.strftime('%Y-%m-%d %H:%M') if item.last_login_at else '从未登录' }}</td>
+        <td><strong class="mono">{{ usage.get(item.id, 0) }} / {{ daily_limit }}</strong></td>
+        <td class="admin-user-actions">
+          {% if item.id == user.id %}
+            <small>当前账号请在“账户安全”中管理</small>
+          {% else %}
+            <div class="row-actions">
+              <form action="/admin/users/{{ item.id }}/active" method="post" data-confirm="确定{{ '停用' if item.active else '启用' }}此账号吗？">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+                <button class="button secondary small">{{ '停用' if item.active else '启用' }}</button>
+              </form>
+              {% if not item.oidc_subject %}
+              <form action="/admin/users/{{ item.id }}/role" method="post" data-confirm="确定修改此账号角色吗？">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+                <input type="hidden" name="role" value="{{ 'member' if item.role == 'admin' else 'admin' }}">
+                <button class="button secondary small">{{ '降为成员' if item.role == 'admin' else '设为管理员' }}</button>
+              </form>
+              {% else %}<small>角色由 OIDC 组同步</small>{% endif %}
+            </div>
+            {% if not item.oidc_subject %}
+            <details class="password-reset">
+              <summary>重置本地密码</summary>
+              <form action="/admin/users/{{ item.id }}/password" method="post" class="form-stack">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+                <label>新密码<input type="password" name="password" autocomplete="new-password" minlength="12" maxlength="{{ password_max_length }}" required></label>
+                <label>确认密码<input type="password" name="password_confirm" autocomplete="new-password" minlength="12" maxlength="{{ password_max_length }}" required></label>
+                <button class="button primary small">重置并注销旧会话</button>
+              </form>
+            </details>
+            {% endif %}
+          {% endif %}
+        </td>
+      </tr>
+    {% else %}<tr><td colspan="6"><div class="empty small"><h3>暂无用户</h3></div></td></tr>{% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
