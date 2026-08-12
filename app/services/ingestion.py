@@ -87,7 +87,7 @@ def ingest_bytes(
         status="pending",
     )
     db.add(invoice)
-    db.add(JobLog(event="invoice.ingested", message=f"已接收 {name}", details={"source": source}))
+    db.add(JobLog(user_id=owner_id, event="invoice.ingested", message=f"已接收 {name}", details={"source": source}))
     try:
         db.commit()
     except IntegrityError:

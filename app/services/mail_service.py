@@ -174,7 +174,7 @@ def _remove_email_invoice(db: Session, invoice, event: str, message: str) -> Non
     settings = get_settings()
     original = settings.upload_dir / invoice.stored_name
     preview = settings.preview_dir / f"{invoice.id}.jpg"
-    db.add(JobLog(level="warning", event=event, message=message, details={"invoice_id": invoice.id}))
+    db.add(JobLog(user_id=getattr(invoice, "owner_id", None), level="warning", event=event, message=message, details={"invoice_id": invoice.id}))
     db.delete(invoice)
     db.commit()
     original.unlink(missing_ok=True)
@@ -347,13 +347,13 @@ def sync_mailbox(db: Session, mailbox: Mailbox) -> dict[str, int]:
         mailbox.last_uid = max_uid
         mailbox.last_sync_at = utcnow()
         mailbox.last_error = ""
-        db.add(JobLog(event="mailbox.synced", message=f"{mailbox.name} 扫描 {scanned} 封，导入 {imported} 张", details={"mailbox_id": mailbox.id}))
+        db.add(JobLog(user_id=mailbox.created_by, event="mailbox.synced", message=f"{mailbox.name} 扫描 {scanned} 封，导入 {imported} 张", details={"mailbox_id": mailbox.id}))
         db.commit()
         return {"scanned": scanned, "imported": imported, "failed": failed}
     except Exception as exc:
         mailbox.last_sync_at = utcnow()
         mailbox.last_error = str(exc)[:1000]
-        db.add(JobLog(level="error", event="mailbox.failed", message=f"{mailbox.name}: {exc}", details={"mailbox_id": mailbox.id}))
+        db.add(JobLog(user_id=mailbox.created_by, level="error", event="mailbox.failed", message=f"{mailbox.name}: {exc}", details={"mailbox_id": mailbox.id}))
         db.commit()
         raise
     finally:

@@ -103,6 +103,26 @@
     sync();
   });
 
+  if (window.location.pathname === '/integrations') {
+    const scrollKey = 'invoicedock:integrations-scroll-y';
+    try {
+      const savedScroll = Number(window.sessionStorage.getItem(scrollKey));
+      window.sessionStorage.removeItem(scrollKey);
+      if (Number.isFinite(savedScroll) && savedScroll > 0) {
+        window.requestAnimationFrame(() => {
+          window.requestAnimationFrame(() => window.scrollTo(0, savedScroll));
+        });
+      }
+      all('form[action^="/integrations"]').forEach((form) => {
+        form.addEventListener('submit', () => {
+          window.sessionStorage.setItem(scrollKey, String(window.scrollY));
+        });
+      });
+    } catch (_error) {
+      // Private browsing can disable sessionStorage; saving still works normally.
+    }
+  }
+
   all('form[data-confirm]').forEach((form) => {
     form.addEventListener('submit', (event) => {
       if (!window.confirm(form.dataset.confirm)) event.preventDefault();

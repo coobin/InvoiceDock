@@ -191,6 +191,7 @@ class JobLog(Base):
     __tablename__ = "job_logs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     level: Mapped[str] = mapped_column(String(20), default="info", index=True)
     event: Mapped[str] = mapped_column(String(80), index=True)
     message: Mapped[str] = mapped_column(Text)

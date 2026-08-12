@@ -64,12 +64,15 @@ from app.services.quota_service import (
 from app.services.settings_service import (
     INTEGRATION_KEYS,
     OIDC_TOGGLE_KEY,
+    USER_CONFIGURABLE_INTEGRATIONS,
     as_bool,
     clear_user_integration,
     get_env_keys,
     get_integrations,
+    get_user_tax_verify_enabled,
     get_value,
     oidc_enabled,
+    set_user_tax_verify_enabled,
     set_value,
     update_integrations,
     user_custom_integrations,
@@ -637,6 +640,13 @@ async def change_password(request: Request, db: Session = Depends(get_db)):
     return RedirectResponse("/profile", status_code=303)
 
 
+def _dashboard_job_logs(db: Session, user: User) -> list[JobLog]:
+    query = select(JobLog)
+    if user.role != "admin":
+        query = query.where(JobLog.user_id == user.id)
+    return list(db.scalars(query.order_by(JobLog.created_at.desc()).limit(7)).all())
+
+
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request, db: Session = Depends(get_db)):
     user = require_page_user(request, db)
@@ -653,7 +663,7 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         select(func.count()).select_from(Invoice).where(Invoice.source.in_(["email", "email-link"]), owned)
     ) or 0
     recent = list(db.scalars(select(Invoice).where(owned).order_by(Invoice.created_at.desc()).limit(8)).all())
-    logs = list(db.scalars(select(JobLog).order_by(JobLog.created_at.desc()).limit(7)).all())
+    logs = _dashboard_job_logs(db, user)
     by_category = list(
         db.execute(
             select(Invoice.category, func.count(Invoice.id), func.coalesce(func.sum(Invoice.total_amount), 0.0))
@@ -1044,12 +1054,14 @@ def integrations_page(request: Request, db: Session = Depends(get_db)):
     values = get_integrations(db, user_id=None if is_admin else user.id, mask_secrets=True)
     own_values = get_integrations(db, user_id=user.id, mask_secrets=True) if not is_admin else {}
     custom = user_custom_integrations(db, user.id) if not is_admin else set()
-    env_keys = get_env_keys()
+    all_env_keys = get_env_keys()
+    env_keys = all_env_keys if is_admin else all_env_keys.intersection(INTEGRATION_KEYS["llm"])
     if is_admin:
         field_values = values
     else:
         field_values = {}
-        for integration, keys in INTEGRATION_KEYS.items():
+        for integration in USER_CONFIGURABLE_INTEGRATIONS:
+            keys = INTEGRATION_KEYS[integration]
             for key in keys:
                 field_values[key] = own_values.get(key, "") if integration in custom else ""
     mode_parts = []
@@ -1062,12 +1074,14 @@ def integrations_page(request: Request, db: Session = Depends(get_db)):
     verify_mode_text = " + ".join(mode_parts) if mode_parts else "未启用任何查验方式"
     bark = get_notification_settings(db, mask_secret=True) if is_admin else {}
     tax_verify_daily_limit = get_tax_verify_daily_limit(db) if is_admin else 0
+    user_tax_verify_enabled = get_user_tax_verify_enabled(db, user.id) if not is_admin else True
     return templates.TemplateResponse(
         request,
         "integrations.html",
         context(request, user, page="integrations", values=values, field_values=field_values,
                 custom=custom, env_keys=env_keys, is_admin=is_admin, verify_mode_text=verify_mode_text,
-                bark=bark, tax_verify_daily_limit=tax_verify_daily_limit, oidc={
+                bark=bark, tax_verify_daily_limit=tax_verify_daily_limit,
+                user_tax_verify_enabled=user_tax_verify_enabled, oidc={
             "enabled": oidc_enabled(db), "toggle": as_bool(get_value(db, OIDC_TOGGLE_KEY, "true" if settings.oidc_enabled else "false")),
             "issuer": settings.oidc_issuer, "client_id": settings.oidc_client_id,
             "callback": f"{settings.app_base_url}/auth/oidc/callback",
@@ -1178,7 +1192,19 @@ async def integrations_save(request: Request, db: Session = Depends(get_db)):
         record_audit(db, request, user, "integrations.update", details={"keys": sorted(values)})
         flash(request, "全局集成配置已加密保存")
     else:
-        for integration, keys in INTEGRATION_KEYS.items():
+        tax_verify_enabled = form.get("tax_verify_enabled") == "on"
+        set_user_tax_verify_enabled(db, user.id, tax_verify_enabled)
+        record_audit(
+            db,
+            request,
+            user,
+            "integrations.update",
+            "user",
+            user.id,
+            {"tax_verify_enabled": tax_verify_enabled},
+        )
+        for integration in USER_CONFIGURABLE_INTEGRATIONS:
+            keys = INTEGRATION_KEYS[integration]
             if str(form.get(f"{integration}_custom", "")) != "1":
                 clear_user_integration(db, user.id, integration)
                 continue
@@ -1198,6 +1224,8 @@ async def integration_test(provider: str, request: Request, db: Session = Depend
     user = require_page_user(request, db)
     form = await request.form()
     validate_csrf(request, str(form.get("csrf_token", "")))
+    if user.role != "admin" and provider != "llm":
+        raise HTTPException(status_code=403, detail="普通用户只能测试自己的 LLM 配置")
     config = get_integrations(db, user_id=None if user.role == "admin" else user.id)
     try:
         result = (

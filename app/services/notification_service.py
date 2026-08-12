@@ -220,6 +220,7 @@ def _record_failure(
     log_details["notification_type"] = event_type
     db.add(
         JobLog(
+            user_id=str(log_details.get("user_id") or "") or None,
             level="error",
             event="notification.failed",
             message=f"Bark {event_type} 推送失败：{exc}"[:1000],

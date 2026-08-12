@@ -530,6 +530,7 @@ def _reserve_provider_call(db, invoice: Invoice, provider: str) -> tuple[bool, s
     message = f"该用户今日税务验票已达到 {limit} 次上限"
     db.add(
         JobLog(
+            user_id=invoice.owner_id,
             level="warning",
             event="verify.daily_limit",
             message=f"{invoice.original_name}：{message}",
@@ -585,6 +586,7 @@ def process_invoice(invoice_id: str) -> None:
                     cache_hit = True
                     db.add(
                         JobLog(
+                            user_id=invoice.owner_id,
                             level="info",
                             event="verify.cache_hit",
                             message=f"{invoice.original_name} 发票号当天已查验，直接复用本地结果，未调用税务发票云",
@@ -609,7 +611,7 @@ def process_invoice(invoice_id: str) -> None:
                         invoice.verified_at = datetime.now(UTC).replace(tzinfo=None)
                     except Exception as exc:
                         provider_error = str(exc)
-                        db.add(JobLog(level="warning", event="piaozone.fallback", message=provider_error, details={"invoice_id": invoice.id}))
+                        db.add(JobLog(user_id=invoice.owner_id, level="warning", event="piaozone.fallback", message=provider_error, details={"invoice_id": invoice.id}))
                 else:
                     provider_error = quota_message
                     quota_exhausted = True
@@ -627,7 +629,7 @@ def process_invoice(invoice_id: str) -> None:
                         invoice.verified_at = datetime.now(UTC).replace(tzinfo=None)
                     except Exception as exc:
                         provider_error = str(exc)
-                        db.add(JobLog(level="warning", event="kingdee.fallback", message=provider_error, details={"invoice_id": invoice.id}))
+                        db.add(JobLog(user_id=invoice.owner_id, level="warning", event="kingdee.fallback", message=provider_error, details={"invoice_id": invoice.id}))
                 else:
                     provider_error = quota_message
                     quota_exhausted = True
@@ -702,6 +704,7 @@ def process_invoice(invoice_id: str) -> None:
                 invoice.status = "duplicate"
             db.add(
                 JobLog(
+                    user_id=invoice.owner_id,
                     event="invoice.processed",
                     message=f"{invoice.original_name} 处理完成：{invoice.status}",
                     details={"invoice_id": invoice.id, "method": invoice.verification_method},
@@ -712,7 +715,7 @@ def process_invoice(invoice_id: str) -> None:
             logger.exception("Invoice processing failed: %s", invoice_id)
             invoice.status = "failed"
             invoice.error_message = str(exc)[:1000]
-            db.add(JobLog(level="error", event="invoice.failed", message=str(exc)[:1000], details={"invoice_id": invoice.id}))
+            db.add(JobLog(user_id=invoice.owner_id, level="error", event="invoice.failed", message=str(exc)[:1000], details={"invoice_id": invoice.id}))
             db.commit()
 
 

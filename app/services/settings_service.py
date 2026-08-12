@@ -53,11 +53,11 @@ INTEGRATION_KEYS = {
     "piaozone": PIAOZONE_KEYS,
     "llm": LLM_KEYS,
 }
-INTEGRATIONS = tuple(INTEGRATION_KEYS)
-
 # 管理员可在“查验集成”页开关的 OIDC 登录总闸。OIDC 客户端参数仍由
 # 环境变量提供（避免密钥入库）；此开关只控制登录入口与自动跳转是否生效。
 OIDC_TOGGLE_KEY = "oidc_enabled"
+USER_TAX_VERIFY_KEY = "tax_verify_enabled"
+USER_CONFIGURABLE_INTEGRATIONS = ("llm",)
 
 
 def env_values() -> dict[str, str]:
@@ -104,7 +104,38 @@ def _user_rows(db: Session, user_id: str) -> dict[str, str]:
 def user_custom_integrations(db: Session, user_id: str) -> set[str]:
     """Integrations for which the user has saved their own configuration."""
     rows = _user_rows(db, user_id)
-    return {integration for integration in INTEGRATIONS if f"{integration}_enabled" in rows}
+    return {
+        integration
+        for integration in USER_CONFIGURABLE_INTEGRATIONS
+        if f"{integration}_enabled" in rows
+    }
+
+
+def get_user_tax_verify_enabled(db: Session, user_id: str) -> bool:
+    return as_bool(_user_rows(db, user_id).get(USER_TAX_VERIFY_KEY, "true"))
+
+
+def set_user_tax_verify_enabled(db: Session, user_id: str, enabled: bool) -> None:
+    row = db.scalar(
+        select(UserIntegration).where(
+            UserIntegration.user_id == user_id,
+            UserIntegration.key == USER_TAX_VERIFY_KEY,
+        )
+    )
+    value = "true" if enabled else "false"
+    if row:
+        row.value = value
+        row.encrypted = False
+    else:
+        db.add(
+            UserIntegration(
+                user_id=user_id,
+                key=USER_TAX_VERIFY_KEY,
+                value=value,
+                encrypted=False,
+            )
+        )
+    db.commit()
 
 
 def get_integrations(
@@ -123,12 +154,15 @@ def get_integrations(
         values[key] = get_value(db, key, values[key])
     if user_id:
         user_vals = _user_rows(db, user_id)
-        for integration in INTEGRATIONS:
+        for integration in USER_CONFIGURABLE_INTEGRATIONS:
             if f"{integration}_enabled" not in user_vals:
                 continue
             for key in INTEGRATION_KEYS[integration]:
                 if key in user_vals:
                     values[key] = user_vals[key]
+        provider_enabled = as_bool(values.get("verify_provider", "true"))
+        user_provider_enabled = as_bool(user_vals.get(USER_TAX_VERIFY_KEY, "true"))
+        values["verify_provider"] = "true" if provider_enabled and user_provider_enabled else "false"
     if mask_secrets:
         for key in SECRET_KEYS:
             values[key] = "••••••••" if values.get(key) else ""

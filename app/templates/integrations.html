@@ -33,8 +33,12 @@
     </div>
   </section>
   {% else %}
-  <div class="notice subtle"><b>查验方式</b><p>当前允许：{{ verify_mode_text }}。此项由管理员统一配置。</p></div>
+  <section class="integration-card user-tax-card">
+    <div class="integration-head"><div class="integration-number">税</div><div><span class="eyebrow">TAX VERIFICATION</span><h2>税务发票云验票</h2><p>使用管理员统一配置的税务发票云；关闭后，你的发票仅走 OCR + LLM 或人工复核。</p></div><label class="switch"><input type="checkbox" name="tax_verify_enabled" {{ 'checked' if user_tax_verify_enabled else '' }}><span></span><b>{{ '已打开' if user_tax_verify_enabled else '已关闭' }}</b></label></div>
+    <div class="privacy-band"><b>每日额度</b><p>税务验票受管理员设置的每用户每日上限约束；同日缓存命中不会消耗额度。</p></div>
+  </section>
   {% endif %}
+  {% if is_admin %}
   <section class="integration-card kingdee-card">
     <div class="integration-head"><div class="integration-number">01</div><div><span class="eyebrow">PRIMARY</span><h2>税务发票云 · 识别查验</h2><p>调用旗舰版 <span class="mono">recognitionCheck</span>；凭据完整且启用时优先使用。</p></div>
       {% if not is_admin %}<label class="switch"><input type="checkbox" name="kingdee_custom" value="1" {{ 'checked' if kd_custom else '' }} data-settings-toggle="kingdee-settings"><span></span><b>自定义配置</b></label>{% else %}<label class="switch"><input type="checkbox" name="kingdee_enabled" {{ 'checked' if values.kingdee_enabled == 'true' else '' }} data-settings-toggle="kingdee-settings"><span></span><b>启用</b></label>{% endif %}
@@ -69,6 +73,7 @@
     </div>
     {% if not is_admin %}<div class="privacy-band"><b>{{ '使用我的配置' if pz_custom else '使用管理员配置' }}</b><p>{{ '凭据已加密保存，仅你自己可见。' if pz_custom else '未自定义时，你的发票使用管理员配置的税务标准版凭据。' }}</p></div>{% endif %}
   </section>
+  {% endif %}
   <section class="integration-card llm-card">
     <div class="integration-head"><div class="integration-number">03</div><div><span class="eyebrow">FALLBACK</span><h2>OCR + LLM 双源一致性</h2><p>本地 Tesseract/文本层与 OpenAI 兼容接口独立提取；只对共同字段做比对。</p></div>
       {% if not is_admin %}<label class="switch"><input type="checkbox" name="llm_custom" value="1" {{ 'checked' if llm_custom else '' }} data-settings-toggle="llm-settings"><span></span><b>自定义配置</b></label>{% else %}<label class="switch"><input type="checkbox" name="llm_enabled" {{ 'checked' if values.llm_enabled == 'true' else '' }} data-settings-toggle="llm-settings"><span></span><b>启用</b></label>{% endif %}
@@ -85,7 +90,7 @@
   </section>
   <button class="button primary save-integrations" type="submit">{{ '保存并加密配置' if is_admin else '保存我的配置' }}</button>
 </form>
-<div class="integration-tests"><form action="/integrations/test/kingdee" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="button secondary">测试税务旗舰版连接</button></form><form action="/integrations/test/piaozone" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="button secondary">测试税务标准版连接</button></form><form action="/integrations/test/llm" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="button secondary">测试当前生效的 LLM 连接</button></form></div>
+<div class="integration-tests">{% if is_admin %}<form action="/integrations/test/kingdee" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="button secondary">测试税务旗舰版连接</button></form><form action="/integrations/test/piaozone" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="button secondary">测试税务标准版连接</button></form>{% endif %}<form action="/integrations/test/llm" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="button secondary">测试当前生效的 LLM 连接</button></form></div>
 {% if is_admin %}
 <section class="integration-card bark-card">
   <div class="integration-head"><div class="integration-number">BK</div><div><span class="eyebrow">NOTIFICATIONS</span><h2>Bark 消息推送</h2><p>向管理员手机推送注册、登录和主要使用事件；推送失败不会影响用户操作。</p></div><span class="status {{ 'verified' if bark.enabled else 'muted' }}">{{ '已启用' if bark.enabled else '未启用' }}</span></div>

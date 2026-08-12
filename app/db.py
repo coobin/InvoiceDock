@@ -47,3 +47,42 @@ def init_db() -> None:
         columns = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(invoices)")}
         if "title_warning" not in columns:
             conn.exec_driver_sql("ALTER TABLE invoices ADD COLUMN title_warning TEXT NOT NULL DEFAULT ''")
+        job_log_columns = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(job_logs)")}
+        if "user_id" not in job_log_columns:
+            conn.exec_driver_sql("ALTER TABLE job_logs ADD COLUMN user_id VARCHAR(36)")
+        conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_job_logs_user_id ON job_logs (user_id)")
+        # Backfill historical invoice/mailbox records so existing users keep
+        # seeing their own history after member dashboards become isolated.
+        conn.exec_driver_sql(
+            """
+            UPDATE job_logs
+            SET user_id = json_extract(details, '$.user_id')
+            WHERE user_id IS NULL
+              AND json_valid(details)
+              AND json_extract(details, '$.user_id') IS NOT NULL
+            """
+        )
+        conn.exec_driver_sql(
+            """
+            UPDATE job_logs
+            SET user_id = (
+                SELECT invoices.owner_id FROM invoices
+                WHERE invoices.id = json_extract(job_logs.details, '$.invoice_id')
+            )
+            WHERE user_id IS NULL
+              AND json_valid(details)
+              AND json_extract(details, '$.invoice_id') IS NOT NULL
+            """
+        )
+        conn.exec_driver_sql(
+            """
+            UPDATE job_logs
+            SET user_id = (
+                SELECT mailboxes.created_by FROM mailboxes
+                WHERE mailboxes.id = json_extract(job_logs.details, '$.mailbox_id')
+            )
+            WHERE user_id IS NULL
+              AND json_valid(details)
+              AND json_extract(details, '$.mailbox_id') IS NOT NULL
+            """
+        )
