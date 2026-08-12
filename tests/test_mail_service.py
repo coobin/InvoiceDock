@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base
@@ -77,6 +77,11 @@ def test_discard_not_cloud_verified_removes_record_and_files(tmp_path, monkeypat
 @pytest.fixture()
 def session_factory(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'dedupe.db'}")
+
+    @event.listens_for(engine, "connect")
+    def enable_foreign_keys(connection, _record) -> None:  # type: ignore[no-untyped-def]
+        connection.execute("PRAGMA foreign_keys=ON")
+
     Base.metadata.create_all(engine)
     return sessionmaker(bind=engine, class_=Session, expire_on_commit=False)
 

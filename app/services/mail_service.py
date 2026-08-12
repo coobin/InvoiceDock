@@ -218,15 +218,19 @@ def _dedupe_keep_pdf(db: Session, invoice) -> bool:
     original = db.get(Invoice, invoice.duplicate_of) if invoice.duplicate_of else None
     if invoice.mime_type == "application/pdf":
         if original and original.mime_type != "application/pdf":
+            # Release the self-referential foreign key before deleting the
+            # non-PDF record. SQLite enforces the constraint immediately, so
+            # deleting the original first fails while this PDF still points
+            # at it as a duplicate.
+            invoice.duplicate_of = None
+            invoice.status = "verified" if invoice.verified_at else "review"
+            db.commit()
             _remove_email_invoice(
                 db,
                 original,
                 "email.dedupe_keep_pdf",
                 f"{original.original_name} 已由 PDF 版本 {invoice.original_name} 替代，仅保留 PDF",
             )
-            invoice.duplicate_of = None
-            invoice.status = "verified" if invoice.verified_at else "review"
-            db.commit()
             return True
         if original:
             _remove_email_invoice(
