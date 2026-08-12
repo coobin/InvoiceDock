@@ -218,3 +218,18 @@ class VerificationCache(Base):
     kingdee_data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class TaxVerificationUsage(Base):
+    """Per-user count of actual tax-provider calls for one local calendar day."""
+
+    __tablename__ = "tax_verification_usage"
+    __table_args__ = (
+        UniqueConstraint("user_id", "usage_date", name="uq_tax_verify_user_date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    usage_date: Mapped[str] = mapped_column(String(10), index=True)
+    count: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)

@@ -5,8 +5,15 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base
-from app.models import AppSetting, Invoice, JobLog, VerificationCache
-from app.services import verifier
+from app.models import (
+    AppSetting,
+    Invoice,
+    JobLog,
+    TaxVerificationUsage,
+    User,
+    VerificationCache,
+)
+from app.services import quota_service, verifier
 
 
 @pytest.fixture()
@@ -122,6 +129,74 @@ def test_process_invoice_reuses_today_cache_and_skips_provider(session_factory, 
         assert invoice.total_amount == 99.8
         assert invoice.kingdee_data == {"cached": True}
         assert db.scalar(select(JobLog).where(JobLog.event == "verify.cache_hit")) is not None
+
+
+def test_process_invoice_skips_provider_after_user_daily_limit(session_factory, tmp_path, monkeypatch):
+    (tmp_path / "limited.pdf").write_bytes(b"%PDF-1.4\n")
+    provider_calls = []
+
+    with session_factory() as db:
+        user = User(username="limited", email="limited@example.com")
+        db.add(user)
+        db.flush()
+        db.add(AppSetting(key="tax_verify_daily_limit", value="1"))
+        db.add(AppSetting(key="piaozone_enabled", value="true"))
+        db.add(AppSetting(key="piaozone_base_url", value="https://example.com"))
+        db.add(AppSetting(key="piaozone_client_id", value="cid"))
+        db.add(AppSetting(key="piaozone_client_secret", value="secret"))
+        db.add(
+            TaxVerificationUsage(
+                user_id=user.id,
+                usage_date="2026-08-12",
+                count=1,
+            )
+        )
+        invoice = Invoice(
+            original_name="limited.pdf",
+            stored_name="limited.pdf",
+            mime_type="application/pdf",
+            file_size=8,
+            sha256="d" * 64,
+            status="pending",
+            owner_id=user.id,
+        )
+        db.add(invoice)
+        db.commit()
+        invoice_id = invoice.id
+
+    monkeypatch.setattr(verifier, "SessionLocal", session_factory)
+    monkeypatch.setattr(verifier, "get_settings", lambda: _fake_settings(tmp_path))
+    monkeypatch.setattr(quota_service, "get_settings", lambda: _fake_settings(tmp_path))
+    monkeypatch.setattr(quota_service, "_today", lambda: "2026-08-12")
+    monkeypatch.setattr(
+        verifier,
+        "extract_document",
+        lambda path, mime: ("发票号码：99990000111122223333", {}, None),
+    )
+    monkeypatch.setattr(
+        verifier,
+        "parse_invoice_fields",
+        lambda text, structured: {"invoice_number": "99990000111122223333"},
+    )
+
+    def unexpected_provider(*_args, **_kwargs):
+        provider_calls.append("called")
+        raise AssertionError("达到每日上限后不应调用发票云")
+
+    monkeypatch.setattr(verifier, "verify_with_piaozone", unexpected_provider)
+
+    verifier.process_invoice(invoice_id)
+
+    with session_factory() as db:
+        invoice = db.get(Invoice, invoice_id)
+        assert provider_calls == []
+        assert invoice.status == "review"
+        assert invoice.verification_method == "ocr"
+        assert "今日税务验票已达到 1 次上限" in invoice.error_message
+        log = db.scalar(select(JobLog).where(JobLog.event == "verify.daily_limit"))
+        assert log is not None
+        assert log.details["user_id"] == invoice.owner_id
+        assert log.details["limit"] == 1
 
 
 def test_provider_verification_writes_today_cache(session_factory, tmp_path, monkeypatch):

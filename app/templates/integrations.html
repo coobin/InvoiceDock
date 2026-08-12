@@ -8,6 +8,16 @@
 {% if env_keys %}
 <div class="notice subtle"><b>环境变量优先</b><p>以下配置项由服务器环境变量提供，表单与数据库中的值不会生效：{{ env_keys | join('、') }}。</p></div>
 {% endif %}
+{% if is_admin %}
+<section class="integration-card quota-card">
+  <div class="integration-head"><div class="integration-number">限</div><div><span class="eyebrow">DAILY QUOTA</span><h2>税务验票每日上限</h2><p>限制每个用户每天实际调用税务发票云的次数，防止公共注册用户过量消耗查验额度。</p></div><span class="status verified">每人 {{ tax_verify_daily_limit }} 次</span></div>
+  <form action="/integrations/tax-verification-limit" method="post" class="quota-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <label>每用户每日上限<input type="number" name="tax_verify_daily_limit" value="{{ tax_verify_daily_limit }}" min="1" max="10000" step="1" required><small>按实际发票云请求计数；失败请求也计数，同日缓存命中不计数。</small></label>
+    <button class="button primary" type="submit">保存验票上限</button>
+  </form>
+</section>
+{% endif %}
 {% set kd_custom = not is_admin and 'kingdee' in custom %}
 {% set pz_custom = not is_admin and 'piaozone' in custom %}
 {% set llm_custom = not is_admin and 'llm' in custom %}

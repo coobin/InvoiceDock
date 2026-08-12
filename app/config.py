@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./data/invoicedock.db"
     session_https_only: bool = False
 
-    admin_username: str = "admin"
+    admin_username: str = "kay"
     admin_password: str = "change-me-now"
     admin_email: str = "admin@example.com"
 

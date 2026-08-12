@@ -26,6 +26,7 @@ from app.services.extractor import (
     image_to_jpeg_bytes,
     parse_invoice_fields,
 )
+from app.services.quota_service import reserve_tax_verification
 from app.services.settings_service import as_bool, get_integrations
 from app.services.title_service import title_warning
 
@@ -522,6 +523,28 @@ def _apply_cached_verification(invoice: Invoice, cache: VerificationCache) -> No
     invoice.verified_at = datetime.now(UTC).replace(tzinfo=None)
 
 
+def _reserve_provider_call(db, invoice: Invoice, provider: str) -> tuple[bool, str]:  # type: ignore[no-untyped-def]
+    allowed, used, limit = reserve_tax_verification(db, invoice.owner_id)
+    if allowed:
+        return True, ""
+    message = f"该用户今日税务验票已达到 {limit} 次上限"
+    db.add(
+        JobLog(
+            level="warning",
+            event="verify.daily_limit",
+            message=f"{invoice.original_name}：{message}",
+            details={
+                "invoice_id": invoice.id,
+                "user_id": invoice.owner_id,
+                "provider": provider,
+                "used": used,
+                "limit": limit,
+            },
+        )
+    )
+    return False, message
+
+
 def process_invoice(invoice_id: str) -> None:
     settings = get_settings()
     with SessionLocal() as db:
@@ -538,6 +561,7 @@ def process_invoice(invoice_id: str) -> None:
         ocr_allowed = as_bool(config.get("verify_ocr", "true"))
         llm_allowed = as_bool(config.get("verify_llm", "true"))
         provider_error = ""
+        quota_exhausted = False
         try:
             providers_ready = (provider_allowed and _piaozone_complete(config)) or (
                 provider_allowed and _kingdee_complete(config)
@@ -573,30 +597,40 @@ def process_invoice(invoice_id: str) -> None:
                     )
 
             if provider_allowed and not cache_hit and _piaozone_complete(config):
-                try:
-                    fields, raw = verify_with_piaozone(path, config)
-                    _apply_fields(invoice, fields)
-                    invoice.kingdee_data = raw
-                    invoice.verification_method = "piaozone"
-                    invoice.status = "verified"
-                    invoice.confidence = 1.0
-                    invoice.verified_at = datetime.now(UTC).replace(tzinfo=None)
-                except Exception as exc:
-                    provider_error = str(exc)
-                    db.add(JobLog(level="warning", event="piaozone.fallback", message=provider_error, details={"invoice_id": invoice.id}))
+                quota_allowed, quota_message = _reserve_provider_call(db, invoice, "piaozone")
+                if quota_allowed:
+                    try:
+                        fields, raw = verify_with_piaozone(path, config)
+                        _apply_fields(invoice, fields)
+                        invoice.kingdee_data = raw
+                        invoice.verification_method = "piaozone"
+                        invoice.status = "verified"
+                        invoice.confidence = 1.0
+                        invoice.verified_at = datetime.now(UTC).replace(tzinfo=None)
+                    except Exception as exc:
+                        provider_error = str(exc)
+                        db.add(JobLog(level="warning", event="piaozone.fallback", message=provider_error, details={"invoice_id": invoice.id}))
+                else:
+                    provider_error = quota_message
+                    quota_exhausted = True
 
-            if provider_allowed and not cache_hit and invoice.status != "verified" and _kingdee_complete(config):
-                try:
-                    fields, raw = verify_with_kingdee(path, config)
-                    _apply_fields(invoice, fields)
-                    invoice.kingdee_data = raw
-                    invoice.verification_method = "kingdee"
-                    invoice.status = "verified"
-                    invoice.confidence = 1.0
-                    invoice.verified_at = datetime.now(UTC).replace(tzinfo=None)
-                except Exception as exc:
-                    provider_error = str(exc)
-                    db.add(JobLog(level="warning", event="kingdee.fallback", message=provider_error, details={"invoice_id": invoice.id}))
+            if provider_allowed and not cache_hit and not quota_exhausted and invoice.status != "verified" and _kingdee_complete(config):
+                quota_allowed, quota_message = _reserve_provider_call(db, invoice, "kingdee")
+                if quota_allowed:
+                    try:
+                        fields, raw = verify_with_kingdee(path, config)
+                        _apply_fields(invoice, fields)
+                        invoice.kingdee_data = raw
+                        invoice.verification_method = "kingdee"
+                        invoice.status = "verified"
+                        invoice.confidence = 1.0
+                        invoice.verified_at = datetime.now(UTC).replace(tzinfo=None)
+                    except Exception as exc:
+                        provider_error = str(exc)
+                        db.add(JobLog(level="warning", event="kingdee.fallback", message=provider_error, details={"invoice_id": invoice.id}))
+                else:
+                    provider_error = quota_message
+                    quota_exhausted = True
 
             if not cache_hit and invoice.status == "verified" and invoice.verification_method in {"piaozone", "kingdee"}:
                 _save_verification_cache(db, invoice, invoice.verification_method)

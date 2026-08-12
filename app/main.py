@@ -57,6 +57,10 @@ from app.services.notification_service import (
     save_notification_settings,
     test_bark_notification,
 )
+from app.services.quota_service import (
+    get_tax_verify_daily_limit,
+    set_tax_verify_daily_limit,
+)
 from app.services.settings_service import (
     INTEGRATION_KEYS,
     OIDC_TOGGLE_KEY,
@@ -1057,16 +1061,40 @@ def integrations_page(request: Request, db: Session = Depends(get_db)):
         mode_parts.append("LLM 双源复核")
     verify_mode_text = " + ".join(mode_parts) if mode_parts else "未启用任何查验方式"
     bark = get_notification_settings(db, mask_secret=True) if is_admin else {}
+    tax_verify_daily_limit = get_tax_verify_daily_limit(db) if is_admin else 0
     return templates.TemplateResponse(
         request,
         "integrations.html",
         context(request, user, page="integrations", values=values, field_values=field_values,
-                custom=custom, env_keys=env_keys, is_admin=is_admin, verify_mode_text=verify_mode_text, bark=bark, oidc={
+                custom=custom, env_keys=env_keys, is_admin=is_admin, verify_mode_text=verify_mode_text,
+                bark=bark, tax_verify_daily_limit=tax_verify_daily_limit, oidc={
             "enabled": oidc_enabled(db), "toggle": as_bool(get_value(db, OIDC_TOGGLE_KEY, "true" if settings.oidc_enabled else "false")),
             "issuer": settings.oidc_issuer, "client_id": settings.oidc_client_id,
             "callback": f"{settings.app_base_url}/auth/oidc/callback",
         }),
     )
+
+
+@app.post("/integrations/tax-verification-limit")
+async def integrations_tax_verification_limit(request: Request, db: Session = Depends(get_db)):
+    user = require_page_admin(request, db)
+    form = await request.form()
+    validate_csrf(request, str(form.get("csrf_token", "")))
+    try:
+        limit = set_tax_verify_daily_limit(db, str(form.get("tax_verify_daily_limit", "")))
+    except ValueError as exc:
+        flash(request, str(exc), "error")
+        return RedirectResponse("/integrations", status_code=303)
+    record_audit(
+        db,
+        request,
+        user,
+        "integrations.update",
+        "tax_verification_limit",
+        details={"daily_limit": limit},
+    )
+    flash(request, f"每个用户每日税务验票上限已设为 {limit} 次")
+    return RedirectResponse("/integrations", status_code=303)
 
 
 @app.post("/integrations/oidc")
