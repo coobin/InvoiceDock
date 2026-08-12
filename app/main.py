@@ -41,6 +41,7 @@ from app.security import (
     current_user,
     encrypt_secret,
     hash_password,
+    is_reserved_username,
     mark_login,
     record_audit,
     throttle_limit,
@@ -447,6 +448,12 @@ async def register_submit(
     confirm = str(form.get("password_confirm", ""))
     if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
         flash(request, "请输入有效的邮箱地址", "error")
+        return RedirectResponse("/register", status_code=303)
+    if is_reserved_username(email):
+        flash(request, "该邮箱前缀为系统保留用户名，请更换邮箱", "error")
+        return RedirectResponse("/register", status_code=303)
+    if display_name and is_reserved_username(display_name):
+        flash(request, "该显示名称为系统保留名称，请更换名称", "error")
         return RedirectResponse("/register", status_code=303)
     if len(password) < settings.registration_min_password_length:
         flash(request, f"密码至少需要 {settings.registration_min_password_length} 位", "error")

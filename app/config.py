@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     # 管理员/邀请制账户。注册账户默认为普通成员，密码使用 Argon2 哈希。
     registration_enabled: bool = True
     registration_min_password_length: int = 8
+    # Comma-separated additions to the built-in reserved username list.
+    reserved_usernames: str = ""
 
     max_upload_mb: int = 25
     mail_scan_interval_minutes: int = 10
@@ -102,6 +104,10 @@ class Settings(BaseSettings):
     @property
     def oidc_domains(self) -> set[str]:
         return {item.strip().lower() for item in self.oidc_allowed_domains.split(",") if item.strip()}
+
+    @property
+    def additional_reserved_usernames(self) -> set[str]:
+        return {item.strip() for item in self.reserved_usernames.split(",") if item.strip()}
 
 
 @lru_cache

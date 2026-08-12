@@ -3,7 +3,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import re
 import secrets
+import unicodedata
 from collections import defaultdict
 from datetime import UTC, datetime
 from time import monotonic
@@ -21,6 +23,63 @@ from app.models import AuditLog, User
 
 password_hasher = PasswordHasher()
 _throttle: dict[str, list[float]] = defaultdict(list)
+
+DEFAULT_RESERVED_USERNAMES = frozenset(
+    {
+        "abuse",
+        "account",
+        "admin",
+        "administrator",
+        "billing",
+        "help",
+        "helpdesk",
+        "invoice",
+        "invoicedock",
+        "kay",
+        "moderator",
+        "no-reply",
+        "noreply",
+        "operator",
+        "owner",
+        "postmaster",
+        "root",
+        "security",
+        "service",
+        "staff",
+        "support",
+        "sysadmin",
+        "system",
+        "superuser",
+        "webmaster",
+        "官方",
+        "客服",
+        "平台",
+        "管理员",
+        "系统管理员",
+    }
+)
+
+
+def _normalise_reserved_username(value: str) -> str:
+    text = unicodedata.normalize("NFKC", value).strip().casefold()
+    if "@" in text:
+        text = text.split("@", 1)[0]
+    text = text.split("+", 1)[0]
+    return re.sub(r"[\s._-]+", "", text)
+
+
+def reserved_usernames() -> set[str]:
+    settings = get_settings()
+    configured = {
+        *DEFAULT_RESERVED_USERNAMES,
+        *settings.additional_reserved_usernames,
+        settings.admin_username,
+    }
+    return {_normalise_reserved_username(item) for item in configured if item}
+
+
+def is_reserved_username(value: str) -> bool:
+    return _normalise_reserved_username(value) in reserved_usernames()
 
 
 def client_ip(request: Request) -> str:
