@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}打印排版 · {{ app_name }}{% endblock %}
 {% block content %}
-<header class="page-head"><div><span class="eyebrow">PRINT STUDIO / 打印排版</span><h1>把票面装进一张 A4</h1><p>服务端生成新 PDF，不修改原件；2 联适合常规电子发票，4 联适合小票。</p></div></header>
+<header class="page-head"><div><span class="eyebrow">PRINT STUDIO / 打印排版</span><h1>把票面装进一张 A4</h1><p>服务端生成新 PDF，不修改原件；2 联使用纵向 A4，4 联自动使用横向 A4。</p></div></header>
 <form action="/print/generate" method="post" class="print-layout" data-print-form>
   <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
   <section class="print-picker panel">
@@ -19,13 +19,12 @@
       <div class="layout-options">
         <label><input type="radio" name="per_page" value="1"><span class="sheet one"><i></i></span><strong>每页 1 张</strong><small>保持最大尺寸</small></label>
         <label><input type="radio" name="per_page" value="2" checked><span class="sheet two"><i></i><i></i></span><strong>每页 2 张</strong><small>常用 · 上下排版</small></label>
-        <label><input type="radio" name="per_page" value="4"><span class="sheet four"><i></i><i></i><i></i><i></i></span><strong>每页 4 张</strong><small>适合较小票面</small></label>
+        <label><input type="radio" name="per_page" value="4"><span class="sheet four"><i></i><i></i><i></i><i></i></span><strong>每页 4 张</strong><small>横向 A4 · 2 × 2</small></label>
       </div>
       <div class="print-summary"><span>预计纸张</span><strong><b data-page-count>0</b> 页 A4</strong></div>
       <button class="button primary wide" type="submit" data-generate-print disabled>生成排版 PDF <span>↓</span></button>
-      <p class="fine-print">多页 PDF 在 1 联模式下保留全部页面；2/4 联模式取每个文件的第一页。</p>
+      <p class="fine-print">多页 PDF 在 1 联模式下保留全部页面；2/4 联模式取每个文件的第一页，并保持发票印章的相对位置。</p>
     </section>
   </aside>
 </form>
 {% endblock %}
-

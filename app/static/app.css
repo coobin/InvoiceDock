@@ -445,7 +445,7 @@ label input, label select, label textarea { display: block; margin-top: 5px; col
 .sheet { display: grid; width: 52px; height: 72px; padding: 5px; gap: 3px; background: #fff; border: 1px solid #aab9c1; box-shadow: 0 4px 10px rgba(25, 49, 65, .08); }
 .sheet i { display: block; background: #dce9ef; border: 1px solid #abc4d0; }
 .sheet.two { grid-template-rows: repeat(2, 1fr); }
-.sheet.four { grid-template: repeat(2, 1fr) / repeat(2, 1fr); }
+.sheet.four { width: 72px; height: 52px; grid-template: repeat(2, 1fr) / repeat(2, 1fr); }
 .layout-options input:checked + .sheet { border: 2px solid var(--carbon); box-shadow: 0 0 0 3px var(--cyan-pale); }
 .print-summary { display: flex; align-items: center; justify-content: space-between; padding: 13px 0; margin: 16px 0; border-top: 1px dashed var(--rule-dark); border-bottom: 1px dashed var(--rule-dark); }
 .print-summary span { color: var(--ink-soft); font-size: 10px; }

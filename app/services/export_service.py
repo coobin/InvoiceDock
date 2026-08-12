@@ -7,6 +7,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from PIL import Image
 from pypdf import PageObject, PdfReader, PdfWriter, Transformation
+from pypdf.generic import NameObject, RectangleObject
 
 from app.config import get_settings
 from app.models import Invoice
@@ -40,7 +41,24 @@ def _place_page(canvas: PageObject, source: PageObject, x: float, y: float, widt
     tx = x + (width - target_width) / 2
     ty = y + (height - target_height) / 2
     transform = Transformation().scale(scale, scale).translate(tx, ty)
+    existing_annotation_count = len(canvas.get("/Annots", []))
     canvas.merge_transformed_page(source, transform, over=True)
+    annotations = canvas.get("/Annots", [])
+    for annotation_reference in annotations[existing_annotation_count:]:
+        annotation = annotation_reference.get_object()
+        rectangle = annotation.get("/Rect")
+        if rectangle is None or len(rectangle) != 4:
+            continue
+        first = transform.apply_on((rectangle[0], rectangle[1]))
+        second = transform.apply_on((rectangle[2], rectangle[3]))
+        annotation[NameObject("/Rect")] = RectangleObject(
+            (
+                min(first[0], second[0]),
+                min(first[1], second[1]),
+                max(first[0], second[0]),
+                max(first[1], second[1]),
+            )
+        )
 
 
 def make_print_pdf(invoices: list[Invoice], per_page: int = 2) -> bytes:
@@ -50,26 +68,27 @@ def make_print_pdf(invoices: list[Invoice], per_page: int = 2) -> bytes:
         raise ValueError("至少选择一张发票")
     readers = [(invoice, _reader_for_invoice(invoice)) for invoice in invoices]
     writer = PdfWriter()
+    page_width, page_height = (A4_HEIGHT, A4_WIDTH) if per_page == 4 else (A4_WIDTH, A4_HEIGHT)
     if per_page == 1:
         for _invoice, reader in readers:
             for source in reader.pages:
-                canvas = PageObject.create_blank_page(width=A4_WIDTH, height=A4_HEIGHT)
-                _place_page(canvas, source, 28, 28, A4_WIDTH - 56, A4_HEIGHT - 56)
+                canvas = PageObject.create_blank_page(width=page_width, height=page_height)
+                _place_page(canvas, source, 28, 28, page_width - 56, page_height - 56)
                 writer.add_page(canvas)
     else:
         margin = 24.0
         gap = 12.0
         columns = 1 if per_page == 2 else 2
         rows = 2
-        slot_width = (A4_WIDTH - margin * 2 - gap * (columns - 1)) / columns
-        slot_height = (A4_HEIGHT - margin * 2 - gap * (rows - 1)) / rows
+        slot_width = (page_width - margin * 2 - gap * (columns - 1)) / columns
+        slot_height = (page_height - margin * 2 - gap * (rows - 1)) / rows
         for batch_start in range(0, len(readers), per_page):
-            canvas = PageObject.create_blank_page(width=A4_WIDTH, height=A4_HEIGHT)
+            canvas = PageObject.create_blank_page(width=page_width, height=page_height)
             for index, (_invoice, reader) in enumerate(readers[batch_start : batch_start + per_page]):
                 row = index // columns
                 col = index % columns
                 x = margin + col * (slot_width + gap)
-                y = A4_HEIGHT - margin - (row + 1) * slot_height - row * gap
+                y = page_height - margin - (row + 1) * slot_height - row * gap
                 _place_page(canvas, reader.pages[0], x, y, slot_width, slot_height)
             writer.add_page(canvas)
     output = BytesIO()

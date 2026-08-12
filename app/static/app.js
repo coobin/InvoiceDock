@@ -31,9 +31,32 @@
     const form = mailboxPreset.closest('form');
     const field = (name) => one(`input[name="${name}"]`, form);
     const presetSuffixes = ['qq.com', 'vip.qq.com', '163.com'];
+    let previousPresetKey = mailboxPreset.value;
+    const clearPresetValues = (presetKey) => {
+      const previousPreset = presets[presetKey];
+      if (!previousPreset) return;
+      const host = field('host');
+      const port = field('port');
+      const name = field('name');
+      const username = field('username');
+      const password = field('password');
+      if (host?.value === previousPreset.host) host.value = '';
+      if (port?.value === previousPreset.port) port.value = '';
+      if (name && Object.values(presets).some((item) => item.name === name.value.trim())) name.value = '';
+      if (username) {
+        const current = username.value.trim().toLowerCase();
+        if (!current.includes('@') || current.endsWith(`@${previousPreset.suffix}`)) username.value = '';
+        username.placeholder = 'name@example.com';
+      }
+      if (password) password.value = '';
+    };
     mailboxPreset.addEventListener('change', () => {
       const preset = presets[mailboxPreset.value];
-      if (!preset) return;
+      if (!preset) {
+        clearPresetValues(previousPresetKey);
+        previousPresetKey = '';
+        return;
+      }
       field('host').value = preset.host;
       field('port').value = preset.port;
       const ssl = field('use_ssl');
@@ -53,6 +76,7 @@
         }
         username.placeholder = `仅输入账号前缀，自动补 @${preset.suffix}`;
       }
+      previousPresetKey = mailboxPreset.value;
     });
     const usernameInput = field('username');
     if (usernameInput) {
