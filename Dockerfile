@@ -3,16 +3,17 @@ FROM ${PYTHON_IMAGE}
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    FORWARDED_ALLOW_IPS=127.0.0.1 \
-    HOME=/tmp \
-    XDG_CACHE_HOME=/tmp/.cache
+    PIP_NO_CACHE_DIR=1
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
        ca-certificates curl tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    FORWARDED_ALLOW_IPS=127.0.0.1 \
+    HOME=/tmp \
+    XDG_CACHE_HOME=/tmp/.cache
 
 WORKDIR /app
 COPY requirements.txt ./
