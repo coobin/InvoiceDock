@@ -9,9 +9,8 @@
       <span><strong>InvoiceDock</strong><small>票舱</small></span>
     </a>
     <div class="login-copy">
-      <span class="eyebrow">SELF-HOSTED INVOICE WORKSPACE</span>
       <h1>让发票沿着一条<br>看得见的流水线前进。</h1>
-      <p>从邮箱归集，到税务查验、双源复核，再到 A4 排版。文件与凭据留在你自己的服务器。</p>
+      <p>从邮箱归集，到税务查验、双源复核，再到 A4 排版。</p>
     </div>
     <div class="mini-pipeline" aria-hidden="true">
       <span><b>收</b>邮箱附件</span><i></i><span><b>验</b>查验 / OCR</span><i></i><span><b>印</b>打印归档</span>
@@ -21,7 +20,6 @@
     <div class="login-card">
       <span class="ticket-label">工作台通行证</span>
       <h2>登录票舱</h2>
-      <p class="muted">使用部署管理员分配或注册的本地账号登录{% if oidc_enabled %}，也可通过组织身份服务（OIDC）登录{% endif %}。</p>
       <form method="post" action="/admin" class="stack-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
         <input type="hidden" name="next" value="{{ next_path }}">
@@ -32,13 +30,8 @@
       {% if registration_enabled %}
       <p class="login-alt">还没有账号？<a href="/register">使用邮箱注册</a></p>
       {% endif %}
-      {% if oidc_enabled %}
-      <div class="or"><span>或</span></div>
-      <a class="button secondary wide" href="/auth/oidc/login">改用 OIDC 登录</a>
-      {% endif %}
-      <div class="privacy-note"><span>⌂</span><p><strong>数据边界</strong><br>本系统默认仅在当前部署环境内保存发票文件。</p></div>
     </div>
-    <small class="version">InvoiceDock {{ app_version }} · Apache-2.0</small>
+    <small class="version">Powered by Kay</small>
   </div>
 </section>
 {% endblock %}

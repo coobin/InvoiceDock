@@ -139,12 +139,6 @@ label input, label select, label textarea { display: block; margin-top: 5px; col
 .login-alt a { color: var(--ink); font-weight: 600; text-underline-offset: 3px; }
 .stack-form { display: flex; margin-top: 26px; flex-direction: column; gap: 15px; }
 .stack-form .button { margin-top: 6px; }
-.or { position: relative; margin: 24px 0; text-align: center; }
-.or::before { position: absolute; top: 50%; right: 0; left: 0; height: 1px; content: ""; background: var(--rule); }
-.or span { position: relative; padding: 0 10px; color: #81929e; background: #fff; font-size: 10px; }
-.privacy-note { display: flex; gap: 11px; margin-top: 25px; padding: 13px; color: #496071; background: var(--paper-blue); border-left: 3px solid var(--carbon); }
-.privacy-note > span { color: var(--carbon); }
-.privacy-note p { margin: 0; font-size: 10px; }
 .version { position: absolute; right: 30px; bottom: 22px; color: #8295a1; font: 9px var(--font-mono); }
 
 /* Dashboard */
