@@ -400,6 +400,12 @@ label input, label select, label textarea { display: block; margin-top: 5px; col
 .oidc-summary dd { margin: 2px 0 0; overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .oidc-toggle { margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--rule-dark); }
 .oidc-toggle .switch { display: inline-flex; }
+.bark-card { border-top: 4px solid var(--carbon); }
+.bark-card .form-stack { gap: 17px; }
+.bark-event-grid { align-items: stretch; }
+.bark-event-grid .toggle-row { padding: 12px; background: #f4f7f9; border: 1px solid var(--rule); }
+.bark-enable { margin: 0; align-self: flex-start; }
+.bark-actions { justify-content: flex-end; }
 
 /* Account */
 .profile-layout { display: grid; max-width: 980px; align-items: start; gap: 22px; grid-template-columns: minmax(260px, .75fr) minmax(360px, 1.25fr); }

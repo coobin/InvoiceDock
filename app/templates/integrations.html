@@ -77,6 +77,27 @@
 </form>
 <div class="integration-tests"><form action="/integrations/test/kingdee" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="button secondary">测试税务旗舰版连接</button></form><form action="/integrations/test/piaozone" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="button secondary">测试税务标准版连接</button></form><form action="/integrations/test/llm" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="button secondary">测试当前生效的 LLM 连接</button></form></div>
 {% if is_admin %}
+<section class="integration-card bark-card">
+  <div class="integration-head"><div class="integration-number">BK</div><div><span class="eyebrow">NOTIFICATIONS</span><h2>Bark 消息推送</h2><p>向管理员手机推送注册、登录和主要使用事件；推送失败不会影响用户操作。</p></div><span class="status {{ 'verified' if bark.enabled else 'muted' }}">{{ '已启用' if bark.enabled else '未启用' }}</span></div>
+  <form action="/integrations/bark" method="post" class="form-stack" id="bark-settings-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <label>Bark 推送地址<input type="password" name="bark_url" value="{{ bark.bark_url }}" autocomplete="new-password" placeholder="https://api.day.app/你的设备密钥"><small>直接粘贴 Bark App 中显示的完整推送地址；设备密钥会加密保存。</small></label>
+    <div class="form-grid three bark-event-grid">
+      <label class="toggle-row"><input type="checkbox" name="bark_notify_register" {{ 'checked' if bark.register else '' }}><span></span><div><strong>注册消息</strong><small>新用户自助注册</small></div></label>
+      <label class="toggle-row"><input type="checkbox" name="bark_notify_login" {{ 'checked' if bark.login else '' }}><span></span><div><strong>登录消息</strong><small>密码或 OIDC 登录</small></div></label>
+      <label class="toggle-row"><input type="checkbox" name="bark_notify_usage" {{ 'checked' if bark.usage else '' }}><span></span><div><strong>使用消息</strong><small>上传、收票、导出和打印</small></div></label>
+    </div>
+    <label class="switch bark-enable"><input type="checkbox" name="bark_enabled" {{ 'checked' if bark.enabled else '' }}><span></span><b>启用 Bark 推送</b></label>
+  </form>
+  <div class="integration-tests bark-actions">
+    <button class="button primary" type="submit" form="bark-settings-form">保存 Bark 设置</button>
+    <form action="/integrations/bark/test" method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <button class="button secondary" type="submit">发送测试消息</button>
+    </form>
+  </div>
+  <div class="privacy-band"><b>隐私提示</b><p>只推送脱敏账号与操作摘要，不推送密码、凭据或发票内容。Bark 地址包含设备密钥，请勿对外泄露。</p></div>
+</section>
 <section class="oidc-summary panel">
   <div><span class="integration-number">ID</span><div><span class="eyebrow">IDENTITY</span><h2>OIDC 登录</h2><p>客户端参数由环境变量配置（避免密钥入库）；此开关控制登录入口与自动跳转是否生效。</p></div><span class="status {{ 'verified' if oidc.enabled else 'muted' }}">{{ '已启用' if oidc.enabled else '未启用' }}</span></div>
   <dl>

@@ -51,6 +51,12 @@ from app.security import (
 from app.services.export_service import make_invoice_workbook, make_preview, make_print_pdf
 from app.services.ingestion import extract_zip_candidates, ingest_bytes
 from app.services.mail_service import scan_all_mailboxes, sync_mailbox, test_mailbox
+from app.services.notification_service import (
+    get_notification_settings,
+    notify_event_background,
+    save_notification_settings,
+    test_bark_notification,
+)
 from app.services.settings_service import (
     INTEGRATION_KEYS,
     OIDC_TOGGLE_KEY,
@@ -83,6 +89,15 @@ if settings.oidc_enabled and settings.oidc_issuer and settings.oidc_client_id:
         server_metadata_url=f"{settings.oidc_issuer}/.well-known/openid-configuration",
         client_kwargs={"scope": settings.oidc_scopes},
     )
+
+
+def _notification_user_label(user: User) -> str:
+    identifier = user.email or user.username
+    if "@" in identifier:
+        local, domain = identifier.rsplit("@", 1)
+        identifier = f"{local[:1] or '*'}***@{domain}"
+    display_name = (user.display_name or "").strip()
+    return f"{display_name}（{identifier}）" if display_name else identifier
 
 
 async def _oidc_set_state_data(session, state, data) -> None:  # type: ignore[no-untyped-def]
@@ -354,7 +369,11 @@ async def login_alias(request: Request, next: str = "/"):  # noqa: A002
 
 @app.post("/admin")
 @app.post("/login")
-async def login_submit(request: Request, db: Session = Depends(get_db)):
+async def login_submit(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
     form = await request.form()
     validate_csrf(request, str(form.get("csrf_token", "")))
     ip = client_ip(request)
@@ -372,6 +391,12 @@ async def login_submit(request: Request, db: Session = Depends(get_db)):
     request.session["user_id"] = user.id
     mark_login(user, db)
     record_audit(db, request, user, "auth.login")
+    background_tasks.add_task(
+        notify_event_background,
+        "login",
+        "InvoiceDock · 用户登录",
+        f"账号：{_notification_user_label(user)}\n方式：邮箱 / 密码",
+    )
     next_path = str(form.get("next", "/"))
     if not next_path.startswith("/") or next_path.startswith("//"):
         next_path = "/"
@@ -396,7 +421,11 @@ def register_page(request: Request, next: str = "/", db: Session = Depends(get_d
 
 
 @app.post("/register")
-async def register_submit(request: Request, db: Session = Depends(get_db)):
+async def register_submit(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
     if not settings.registration_enabled:
         raise HTTPException(status_code=404, detail="注册已关闭")
     form = await request.form()
@@ -437,6 +466,12 @@ async def register_submit(request: Request, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
     record_audit(db, request, None, "auth.register", details={"username": email})
+    background_tasks.add_task(
+        notify_event_background,
+        "register",
+        "InvoiceDock · 新用户注册",
+        f"账号：{_notification_user_label(user)}",
+    )
     flash(request, "注册成功，请用邮箱和密码登录")
     return RedirectResponse("/admin", status_code=303)
 
@@ -461,7 +496,11 @@ async def oidc_login(request: Request, db: Session = Depends(get_db)):
 
 
 @app.get("/auth/oidc/callback")
-async def oidc_callback(request: Request, db: Session = Depends(get_db)):
+async def oidc_callback(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
     if not oidc_enabled(db) or not oauth.oidc:
         raise HTTPException(status_code=404, detail="OIDC 未启用")
     state = str(request.query_params.get("state", ""))
@@ -497,6 +536,7 @@ async def oidc_callback(request: Request, db: Session = Depends(get_db)):
     if isinstance(groups, str):
         groups = [groups]
     is_admin = bool(settings.oidc_admin_group and settings.oidc_admin_group in groups)
+    created_user = not user
     if not user:
         username_base = str(claims.get("preferred_username") or email_address or f"oidc-{subject}")[:100]
         username = username_base
@@ -529,6 +569,19 @@ async def oidc_callback(request: Request, db: Session = Depends(get_db)):
     request.session["user_id"] = user.id
     mark_login(user, db)
     record_audit(db, request, user, "auth.oidc_login")
+    if created_user:
+        background_tasks.add_task(
+            notify_event_background,
+            "register",
+            "InvoiceDock · 新用户注册",
+            f"账号：{_notification_user_label(user)}\n来源：OIDC",
+        )
+    background_tasks.add_task(
+        notify_event_background,
+        "login",
+        "InvoiceDock · 用户登录",
+        f"账号：{_notification_user_label(user)}\n方式：OIDC",
+    )
     return RedirectResponse(next_path, status_code=303)
 
 
@@ -709,6 +762,12 @@ async def upload_submit(
     for invoice_id in created_ids:
         background_tasks.add_task(process_invoice, invoice_id)
     record_audit(db, request, user, "invoice.upload", "invoice", details={"created": len(created_ids), "duplicates": duplicates})
+    background_tasks.add_task(
+        notify_event_background,
+        "usage",
+        "InvoiceDock · 发票上传",
+        f"用户：{_notification_user_label(user)}\n新增：{len(created_ids)} 张；重复：{duplicates} 张",
+    )
     if errors and not created_ids:
         flash(request, "；".join(errors[:3]), "error")
     else:
@@ -807,7 +866,12 @@ async def invoices_batch_delete(request: Request, db: Session = Depends(get_db))
 
 
 @app.get("/export/files")
-def export_invoice_files(request: Request, ids: str = "", db: Session = Depends(get_db)):
+def export_invoice_files(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    ids: str = "",
+    db: Session = Depends(get_db),
+):
     user = require_page_user(request, db)
     selected_ids = [item for item in ids.split(",") if item]
     query = select(Invoice).where(Invoice.id.in_(selected_ids))
@@ -838,6 +902,12 @@ def export_invoice_files(request: Request, ids: str = "", db: Session = Depends(
     if not used:
         raise HTTPException(status_code=404, detail="所选发票的原始文件不存在")
     record_audit(db, request, user, "invoice.export_files", details={"count": len(used)})
+    background_tasks.add_task(
+        notify_event_background,
+        "usage",
+        "InvoiceDock · 导出原始文件",
+        f"用户：{_notification_user_label(user)}\n数量：{len(used)} 个",
+    )
     filename = f"invoices-by-category-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}.zip"
     return Response(
         data,
@@ -924,8 +994,14 @@ async def mailbox_sync(mailbox_id: str, request: Request, background_tasks: Back
     user = require_page_user(request, db)
     form = await request.form()
     validate_csrf(request, str(form.get("csrf_token", "")))
-    owned_mailbox(request, db, user, mailbox_id)
+    mailbox = owned_mailbox(request, db, user, mailbox_id)
     background_tasks.add_task(sync_mailbox_task, mailbox_id)
+    background_tasks.add_task(
+        notify_event_background,
+        "usage",
+        "InvoiceDock · 邮箱收票",
+        f"用户：{_notification_user_label(user)}\n邮箱：{mailbox.name}\n操作：立即收取",
+    )
     record_audit(db, request, user, "mailbox.sync", "mailbox", mailbox_id)
     flash(request, "已开始收取邮件，结果会显示在运行记录中")
     return RedirectResponse("/mailboxes", status_code=303)
@@ -980,11 +1056,12 @@ def integrations_page(request: Request, db: Session = Depends(get_db)):
     if as_bool(values.get("verify_llm", "true")):
         mode_parts.append("LLM 双源复核")
     verify_mode_text = " + ".join(mode_parts) if mode_parts else "未启用任何查验方式"
+    bark = get_notification_settings(db, mask_secret=True) if is_admin else {}
     return templates.TemplateResponse(
         request,
         "integrations.html",
         context(request, user, page="integrations", values=values, field_values=field_values,
-                custom=custom, env_keys=env_keys, is_admin=is_admin, verify_mode_text=verify_mode_text, oidc={
+                custom=custom, env_keys=env_keys, is_admin=is_admin, verify_mode_text=verify_mode_text, bark=bark, oidc={
             "enabled": oidc_enabled(db), "toggle": as_bool(get_value(db, OIDC_TOGGLE_KEY, "true" if settings.oidc_enabled else "false")),
             "issuer": settings.oidc_issuer, "client_id": settings.oidc_client_id,
             "callback": f"{settings.app_base_url}/auth/oidc/callback",
@@ -1001,6 +1078,57 @@ async def integrations_oidc_toggle(request: Request, db: Session = Depends(get_d
     set_value(db, OIDC_TOGGLE_KEY, "true" if enabled else "false")
     record_audit(db, request, user, "integrations.update", "oidc", "", {"enabled": enabled})
     flash(request, f"OIDC 登录已{'启用' if enabled else '关闭'}")
+    return RedirectResponse("/integrations", status_code=303)
+
+
+@app.post("/integrations/bark")
+async def integrations_bark_save(request: Request, db: Session = Depends(get_db)):
+    user = require_page_admin(request, db)
+    form = await request.form()
+    validate_csrf(request, str(form.get("csrf_token", "")))
+    try:
+        save_notification_settings(
+            db,
+            bark_url=str(form.get("bark_url", "")),
+            enabled=form.get("bark_enabled") == "on",
+            register=form.get("bark_notify_register") == "on",
+            login=form.get("bark_notify_login") == "on",
+            usage=form.get("bark_notify_usage") == "on",
+        )
+    except ValueError as exc:
+        flash(request, str(exc), "error")
+        return RedirectResponse("/integrations", status_code=303)
+    record_audit(
+        db,
+        request,
+        user,
+        "integrations.update",
+        "bark",
+        details={
+            "enabled": form.get("bark_enabled") == "on",
+            "events": [
+                event
+                for event in ("register", "login", "usage")
+                if form.get(f"bark_notify_{event}") == "on"
+            ],
+        },
+    )
+    flash(request, "Bark 推送设置已加密保存")
+    return RedirectResponse("/integrations", status_code=303)
+
+
+@app.post("/integrations/bark/test")
+async def integrations_bark_test(request: Request, db: Session = Depends(get_db)):
+    user = require_page_admin(request, db)
+    form = await request.form()
+    validate_csrf(request, str(form.get("csrf_token", "")))
+    try:
+        test_bark_notification(db)
+        flash(request, "Bark 测试消息已发送")
+        record_audit(db, request, user, "integrations.test", "bark", details={"success": True})
+    except Exception as exc:
+        flash(request, f"Bark 测试失败：{exc}", "error")
+        record_audit(db, request, user, "integrations.test", "bark", details={"success": False})
     return RedirectResponse("/integrations", status_code=303)
 
 
@@ -1124,7 +1252,11 @@ def print_page(request: Request, ids: str = "", db: Session = Depends(get_db)):
 
 
 @app.post("/print/generate")
-async def print_generate(request: Request, db: Session = Depends(get_db)):
+async def print_generate(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
     user = require_page_user(request, db)
     form = await request.form()
     validate_csrf(request, str(form.get("csrf_token", "")))
@@ -1142,16 +1274,35 @@ async def print_generate(request: Request, db: Session = Depends(get_db)):
         flash(request, str(exc), "error")
         return RedirectResponse("/print", status_code=303)
     record_audit(db, request, user, "print.generate", details={"count": len(items), "per_page": per_page})
+    background_tasks.add_task(
+        notify_event_background,
+        "usage",
+        "InvoiceDock · 生成打印 PDF",
+        f"用户：{_notification_user_label(user)}\n数量：{len(items)} 张；版式：每页 {per_page} 张",
+    )
     filename = f"invoices-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}.pdf"
     return Response(output, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 @app.get("/export.xlsx")
-def export_excel(request: Request, q: str = "", status: str = "", source: str = "", db: Session = Depends(get_db)):
+def export_excel(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    q: str = "",
+    status: str = "",
+    source: str = "",
+    db: Session = Depends(get_db),
+):
     user = require_page_user(request, db)
     items = list(db.scalars(invoice_query(q, status, source, user).order_by(Invoice.created_at.desc()).limit(10000)).all())
     output = make_invoice_workbook(items)
     record_audit(db, request, user, "invoice.export", details={"count": len(items)})
+    background_tasks.add_task(
+        notify_event_background,
+        "usage",
+        "InvoiceDock · 导出发票台账",
+        f"用户：{_notification_user_label(user)}\n数量：{len(items)} 张",
+    )
     filename = f"invoice-ledger-{datetime.now(UTC).strftime('%Y%m%d')}.xlsx"
     return Response(
         output,
