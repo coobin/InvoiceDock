@@ -10,7 +10,7 @@
   <div class="ledger-total"><small>已归集票据</small><strong>{{ total }}</strong><span>张</span><em>¥ {{ '%.2f'|format(total_amount) }}</em></div>
   <div class="ledger-metric good"><span>查验 / 复核通过</span><strong>{{ verified }}</strong><small>{{ '%.0f'|format(verified / total * 100) if total else 0 }}%</small></div>
   <div class="ledger-metric warn"><span>需要处理</span><strong>{{ review }}</strong><small>冲突、重复或失败</small></div>
-  <div class="ledger-metric blue"><span>邮箱自动归集</span><strong>{{ email_count }}</strong><small>其余来自手动上传</small></div>
+  <div class="ledger-metric blue"><span>待开票预录</span><strong>{{ pending_expenses }}</strong><small>预计 ¥ {{ '%.2f'|format(pending_amount) }}</small></div>
 </section>
 
 <section class="pipeline-board">
@@ -40,6 +40,20 @@
     {% else %}<div class="empty"><b>收</b><h3>还没有发票</h3><p>先上传一张 PDF，或连接用于收票的邮箱。</p><a class="button secondary" href="/upload">导入第一张</a></div>{% endif %}
   </section>
   <aside class="side-stack">
+    {% if projects_stats %}
+    <section class="panel project-panel">
+      <div class="section-title compact"><div><h2>项目支出</h2><p>预算与开销进度</p></div><a href="/projects">管理项目 →</a></div>
+      <div class="category-list">
+      {% for item in projects_stats %}
+        <div>
+          <span><b>{{ item.project.name }}</b><small>{{ item.invoice_count }} 张发票 · {{ item.pending_count }} 笔待开</small></span>
+          <em>¥ {{ '%.2f'|format(item.total_used) }}</em>
+          <i style="--w: {{ [item.percent, 4]|max if item.percent is not none else 30 }}%"></i>
+        </div>
+      {% endfor %}
+      </div>
+    </section>
+    {% endif %}
     <section class="panel category-panel">
       <div class="section-title compact"><div><h2>费用分布</h2><p>按价税合计排序</p></div></div>
       {% if by_category %}<div class="category-list">

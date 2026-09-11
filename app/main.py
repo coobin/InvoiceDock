@@ -36,7 +36,18 @@ from starlette.middleware.sessions import SessionMiddleware
 from app import __version__
 from app.config import get_settings
 from app.db import SessionLocal, get_db, init_db
-from app.models import AuditLog, Invoice, JobLog, Mailbox, OAuthState, User, UserTitle, utcnow
+from app.models import (
+    AuditLog,
+    ExpenseItem,
+    Invoice,
+    JobLog,
+    Mailbox,
+    OAuthState,
+    Project,
+    User,
+    UserTitle,
+    utcnow,
+)
 from app.security import (
     bootstrap_admin,
     client_ip,
@@ -252,6 +263,12 @@ STATUS_META = {
     "failed": ("处理失败", "failed"),
 }
 
+EXPENSE_STATUS_META = {
+    "pending": ("待开票", "review"),
+    "reconciled": ("已核销", "verified"),
+    "cancelled": ("已作废", "muted"),
+}
+
 
 def human_size(value: int) -> str:
     size = float(value)
@@ -280,6 +297,7 @@ templates.env.globals.update(
     app_version=__version__,
     asset_version=asset_version(),
     status_meta=STATUS_META,
+    expense_status_meta=EXPENSE_STATUS_META,
     human_size=human_size,
 )
 
@@ -306,10 +324,18 @@ def require_page_admin(request: Request, db: Session) -> User:
     return user
 
 
-def invoice_query(q: str = "", status: str = "", source: str = "", user: User | None = None):
+def invoice_query(
+    q: str = "",
+    status: str = "",
+    source: str = "",
+    project_id: str = "",
+    user: User | None = None,
+):
     query = select(Invoice)
     if user and user.role != "admin":
         query = query.where(Invoice.owner_id == user.id)
+    if project_id:
+        query = query.where(Invoice.project_id == project_id)
     if q:
         pattern = f"%{q.strip()}%"
         query = query.where(
@@ -335,6 +361,24 @@ def owned_invoice(request: Request, db: Session, user: User, invoice_id: str) ->
     if user.role != "admin" and invoice.owner_id != user.id:
         raise HTTPException(status_code=404, detail="发票不存在")
     return invoice
+
+
+def owned_project(request: Request, db: Session, user: User, project_id: str) -> Project:
+    project = db.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    if user.role != "admin" and project.owner_id != user.id:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    return project
+
+
+def owned_expense(request: Request, db: Session, user: User, expense_id: str) -> ExpenseItem:
+    expense = db.get(ExpenseItem, expense_id)
+    if not expense:
+        raise HTTPException(status_code=404, detail="待开票项不存在")
+    if user.role != "admin" and expense.owner_id != user.id:
+        raise HTTPException(status_code=404, detail="待开票项不存在")
+    return expense
 
 
 def owned_mailbox(request: Request, db: Session, user: User, mailbox_id: str) -> Mailbox:
@@ -840,6 +884,9 @@ def _dashboard_job_logs(db: Session, user: User) -> list[JobLog]:
 def dashboard(request: Request, db: Session = Depends(get_db)):
     user = require_page_user(request, db)
     owned = Invoice.owner_id == user.id if user.role != "admin" else None
+    proj_owned = Project.owner_id == user.id if user.role != "admin" else None
+    exp_owned = ExpenseItem.owner_id == user.id if user.role != "admin" else None
+
     total = db.scalar(select(func.count()).select_from(Invoice).where(owned)) or 0
     total_amount = db.scalar(select(func.coalesce(func.sum(Invoice.total_amount), 0.0)).where(owned)) or 0.0
     verified = db.scalar(
@@ -851,6 +898,31 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
     email_count = db.scalar(
         select(func.count()).select_from(Invoice).where(Invoice.source.in_(["email", "email-link"]), owned)
     ) or 0
+
+    pending_expenses = db.scalar(
+        select(func.count()).select_from(ExpenseItem).where(ExpenseItem.status == "pending", exp_owned)
+    ) or 0
+    pending_amount = db.scalar(
+        select(func.coalesce(func.sum(ExpenseItem.expected_amount), 0.0)).where(ExpenseItem.status == "pending", exp_owned)
+    ) or 0.0
+
+    projects = list(db.scalars(select(Project).where(Project.status == "active", proj_owned).order_by(Project.created_at.desc()).limit(6)).all())
+    projects_stats = []
+    for p in projects:
+        inv_sum = db.scalar(select(func.coalesce(func.sum(Invoice.total_amount), 0.0)).where(Invoice.project_id == p.id, owned)) or 0.0
+        inv_cnt = db.scalar(select(func.count()).select_from(Invoice).where(Invoice.project_id == p.id, owned)) or 0
+        exp_sum = db.scalar(select(func.coalesce(func.sum(ExpenseItem.expected_amount), 0.0)).where(ExpenseItem.project_id == p.id, ExpenseItem.status == "pending", exp_owned)) or 0.0
+        exp_cnt = db.scalar(select(func.count()).select_from(ExpenseItem).where(ExpenseItem.project_id == p.id, ExpenseItem.status == "pending", exp_owned)) or 0
+        projects_stats.append({
+            "project": p,
+            "invoice_sum": inv_sum,
+            "invoice_count": inv_cnt,
+            "pending_sum": exp_sum,
+            "pending_count": exp_cnt,
+            "total_used": inv_sum + exp_sum,
+            "percent": min(100.0, round((inv_sum + exp_sum) / p.budget * 100, 1)) if p.budget and p.budget > 0 else None,
+        })
+
     recent = list(db.scalars(select(Invoice).where(owned).order_by(Invoice.created_at.desc()).limit(8)).all())
     logs = _dashboard_job_logs(db, user)
     by_category = list(
@@ -874,6 +946,9 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
             verified=verified,
             review=review,
             email_count=email_count,
+            pending_expenses=pending_expenses,
+            pending_amount=pending_amount,
+            projects_stats=projects_stats,
             recent=recent,
             logs=logs,
             by_category=by_category,
@@ -887,20 +962,39 @@ def invoices_page(
     q: str = "",
     status: str = "",
     source: str = "",
+    project_id: str = "",
     page: int = 1,
     db: Session = Depends(get_db),
 ):
     user = require_page_user(request, db)
     page = max(page, 1)
     per_page = 25
-    query = invoice_query(q, status, source, user)
+    proj_owned = Project.owner_id == user.id if user.role != "admin" else None
+    projects = list(db.scalars(select(Project).where(Project.status == "active", proj_owned).order_by(Project.name.asc())).all())
+    projects_map = {p.id: p for p in db.scalars(select(Project).where(proj_owned)).all()}
+
+    query = invoice_query(q, status, source, project_id, user)
     count = db.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0
     items = list(db.scalars(query.order_by(Invoice.created_at.desc()).offset((page - 1) * per_page).limit(per_page)).all())
     pages = max(1, (count + per_page - 1) // per_page)
     return templates.TemplateResponse(
         request,
         "invoices.html",
-        context(request, user, page="invoices", items=items, q=q, filter_status=status, source=source, current_page=page, pages=pages, count=count),
+        context(
+            request,
+            user,
+            page="invoices",
+            items=items,
+            q=q,
+            filter_status=status,
+            source=source,
+            selected_project_id=project_id,
+            projects=projects,
+            projects_map=projects_map,
+            current_page=page,
+            pages=pages,
+            count=count,
+        ),
     )
 
 
@@ -911,14 +1005,50 @@ def invoice_detail(invoice_id: str, request: Request, db: Session = Depends(get_
     duplicate = db.get(Invoice, invoice.duplicate_of) if invoice.duplicate_of else None
     if duplicate and user.role != "admin" and duplicate.owner_id != user.id:
         duplicate = None
+
+    proj_owned = Project.owner_id == user.id if user.role != "admin" else None
+    exp_owned = ExpenseItem.owner_id == user.id if user.role != "admin" else None
+    projects = list(db.scalars(select(Project).where(Project.status == "active", proj_owned).order_by(Project.name.asc())).all())
+    current_project = db.get(Project, invoice.project_id) if invoice.project_id else None
+    reconciled_expense = db.scalar(select(ExpenseItem).where(ExpenseItem.reconciled_invoice_id == invoice.id))
+    available_expenses = list(
+        db.scalars(
+            select(ExpenseItem)
+            .where(ExpenseItem.status == "pending", exp_owned)
+            .order_by(ExpenseItem.expense_date.desc(), ExpenseItem.created_at.desc())
+            .limit(50)
+        ).all()
+    )
+
     return templates.TemplateResponse(
         request,
         "invoice_detail.html",
-        context(request, user, page="invoices", invoice=invoice, duplicate=duplicate, field_names={
-            "invoice_type": "发票类型", "invoice_code": "发票代码", "invoice_number": "发票号码", "invoice_date": "开票日期",
-            "check_code": "校验码", "seller_name": "销售方", "seller_tax_id": "销售方税号", "buyer_name": "购买方",
-            "buyer_tax_id": "购买方税号", "amount": "不含税金额", "tax_amount": "税额", "total_amount": "价税合计", "category": "分类",
-        }),
+        context(
+            request,
+            user,
+            page="invoices",
+            invoice=invoice,
+            duplicate=duplicate,
+            current_project=current_project,
+            projects=projects,
+            reconciled_expense=reconciled_expense,
+            available_expenses=available_expenses,
+            field_names={
+                "invoice_type": "发票类型",
+                "invoice_code": "发票代码",
+                "invoice_number": "发票号码",
+                "invoice_date": "开票日期",
+                "check_code": "校验码",
+                "seller_name": "销售方",
+                "seller_tax_id": "销售方税号",
+                "buyer_name": "购买方",
+                "buyer_tax_id": "购买方税号",
+                "amount": "不含税金额",
+                "tax_amount": "税额",
+                "total_amount": "价税合计",
+                "category": "分类",
+            },
+        ),
     )
 
 
@@ -1028,6 +1158,39 @@ async def save_invoice(invoice_id: str, request: Request, db: Session = Depends(
                 flash(request, "金额超出有效范围", "error")
                 return RedirectResponse(f"/invoices/{invoice.id}", status_code=303)
             setattr(invoice, field, round(value, 2) if value is not None else None)
+
+    project_id = str(form.get("project_id", "")).strip() or None
+    if project_id:
+        proj = db.get(Project, project_id)
+        if proj and (user.role == "admin" or proj.owner_id == user.id):
+            invoice.project_id = project_id
+        else:
+            invoice.project_id = None
+    else:
+        invoice.project_id = None
+
+    reconcile_expense_id = str(form.get("reconcile_expense_id", "")).strip()
+    if reconcile_expense_id:
+        expense = db.get(ExpenseItem, reconcile_expense_id)
+        if expense and (user.role == "admin" or expense.owner_id == user.id):
+            # 解除该发票之前可能绑定的其它待开票项
+            for old_exp in db.scalars(select(ExpenseItem).where(ExpenseItem.reconciled_invoice_id == invoice.id)).all():
+                if old_exp.id != expense.id:
+                    old_exp.reconciled_invoice_id = None
+                    old_exp.status = "pending"
+                    old_exp.reconciled_at = None
+            expense.reconciled_invoice_id = invoice.id
+            expense.status = "reconciled"
+            expense.reconciled_at = utcnow()
+            if not invoice.project_id and expense.project_id:
+                invoice.project_id = expense.project_id
+
+    if str(form.get("unreconcile_expense", "")).lower() in ("true", "1", "yes"):
+        for exp in db.scalars(select(ExpenseItem).where(ExpenseItem.reconciled_invoice_id == invoice.id)).all():
+            exp.reconciled_invoice_id = None
+            exp.status = "pending"
+            exp.reconciled_at = None
+
     invoice.status = "reviewed"
     invoice.verified_at = utcnow()
     db.commit()
@@ -1048,6 +1211,10 @@ async def delete_invoice(invoice_id: str, request: Request, db: Session = Depend
     for child in db.scalars(select(Invoice).where(Invoice.duplicate_of == invoice.id)).all():
         child.duplicate_of = None
         child.status = "verified" if child.verified_at else "review"
+    for exp in db.scalars(select(ExpenseItem).where(ExpenseItem.reconciled_invoice_id == invoice.id)).all():
+        exp.reconciled_invoice_id = None
+        exp.status = "pending"
+        exp.reconciled_at = None
     db.delete(invoice)
     db.commit()
     original.unlink(missing_ok=True)
@@ -1075,6 +1242,10 @@ async def invoices_batch_delete(request: Request, db: Session = Depends(get_db))
         if child.id not in selected:
             child.duplicate_of = None
             child.status = "verified" if child.verified_at else "review"
+    for exp in db.scalars(select(ExpenseItem).where(ExpenseItem.reconciled_invoice_id.in_(selected))).all():
+        exp.reconciled_invoice_id = None
+        exp.status = "pending"
+        exp.reconciled_at = None
     for invoice in invoices:
         original = settings.upload_dir / invoice.stored_name
         preview = settings.preview_dir / f"{invoice.id}.jpg"
@@ -1083,7 +1254,31 @@ async def invoices_batch_delete(request: Request, db: Session = Depends(get_db))
         original.unlink(missing_ok=True)
         preview.unlink(missing_ok=True)
     db.commit()
-    flash(request, f"已删除 {len(invoices)} 张发票及其本地文件")
+    flash(request, f"已删除 {len(invoices)} 张发票")
+    return RedirectResponse("/invoices", status_code=303)
+
+
+@app.post("/invoices/batch-assign-project")
+async def invoices_batch_assign_project(request: Request, db: Session = Depends(get_db)):
+    user = require_page_user(request, db)
+    form = await request.form()
+    validate_csrf(request, str(form.get("csrf_token", "")))
+    ids = [str(value) for value in form.getlist("invoice_ids")]
+    project_id = str(form.get("project_id", "")).strip() or None
+    if project_id:
+        owned_project(request, db, user, project_id)
+    query = select(Invoice).where(Invoice.id.in_(ids))
+    if user.role != "admin":
+        query = query.where(Invoice.owner_id == user.id)
+    invoices = list(db.scalars(query).all())
+    if not invoices:
+        flash(request, "未选择任何发票", "error")
+        return RedirectResponse("/invoices", status_code=303)
+    for inv in invoices:
+        inv.project_id = project_id
+    db.commit()
+    record_audit(db, request, user, "invoice.batch_assign_project", details={"count": len(invoices), "project_id": project_id})
+    flash(request, f"已为 {len(invoices)} 张发票设置所属项目")
     return RedirectResponse("/invoices", status_code=303)
 
 
@@ -1590,12 +1785,27 @@ def export_excel(
     q: str = "",
     status: str = "",
     source: str = "",
+    project_id: str = "",
     db: Session = Depends(get_db),
 ):
     user = require_page_user(request, db)
-    items = list(db.scalars(invoice_query(q, status, source, user).order_by(Invoice.created_at.desc()).limit(10000)).all())
-    output = make_invoice_workbook(items)
-    record_audit(db, request, user, "invoice.export", details={"count": len(items)})
+    items = list(db.scalars(invoice_query(q, status, source, project_id, user).order_by(Invoice.created_at.desc()).limit(10000)).all())
+    proj_owned = Project.owner_id == user.id if user.role != "admin" else None
+    exp_owned = ExpenseItem.owner_id == user.id if user.role != "admin" else None
+    projects_map = {p.id: p for p in db.scalars(select(Project).where(proj_owned)).all()}
+
+    exp_query = select(ExpenseItem).where(exp_owned)
+    if project_id:
+        exp_query = exp_query.where(ExpenseItem.project_id == project_id)
+    expenses = list(db.scalars(exp_query.order_by(ExpenseItem.expense_date.desc(), ExpenseItem.created_at.desc()).limit(5000)).all())
+    invoices_map = {inv.id: inv for inv in items}
+    missing_inv_ids = [exp.reconciled_invoice_id for exp in expenses if exp.reconciled_invoice_id and exp.reconciled_invoice_id not in invoices_map]
+    if missing_inv_ids:
+        for extra_inv in db.scalars(select(Invoice).where(Invoice.id.in_(missing_inv_ids))).all():
+            invoices_map[extra_inv.id] = extra_inv
+
+    output = make_invoice_workbook(items, projects_map=projects_map, expenses=expenses, invoices_map=invoices_map)
+    record_audit(db, request, user, "invoice.export", details={"count": len(items), "project_id": project_id})
     background_tasks.add_task(
         notify_event_background,
         "usage",
@@ -1769,3 +1979,402 @@ async def admin_user_reset_password(
     record_audit(db, request, actor, "user.password_reset", "user", target.id)
     flash(request, f"已重置 {target.username} 的本地密码，旧会话已全部失效")
     return RedirectResponse("/admin/users", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# 项目管理（Projects）
+# ---------------------------------------------------------------------------
+
+@app.get("/projects", response_class=HTMLResponse)
+def projects_page(request: Request, db: Session = Depends(get_db)):
+    user = require_page_user(request, db)
+    owned = Project.owner_id == user.id if user.role != "admin" else None
+    inv_owned = Invoice.owner_id == user.id if user.role != "admin" else None
+    exp_owned = ExpenseItem.owner_id == user.id if user.role != "admin" else None
+
+    projects = list(db.scalars(select(Project).where(owned).order_by(Project.status.asc(), Project.created_at.desc())).all())
+    items = []
+    for p in projects:
+        inv_count = db.scalar(select(func.count()).select_from(Invoice).where(Invoice.project_id == p.id, inv_owned)) or 0
+        inv_amount = db.scalar(select(func.coalesce(func.sum(Invoice.total_amount), 0.0)).where(Invoice.project_id == p.id, inv_owned)) or 0.0
+        exp_count = db.scalar(select(func.count()).select_from(ExpenseItem).where(ExpenseItem.project_id == p.id, ExpenseItem.status == "pending", exp_owned)) or 0
+        exp_amount = db.scalar(select(func.coalesce(func.sum(ExpenseItem.expected_amount), 0.0)).where(ExpenseItem.project_id == p.id, ExpenseItem.status == "pending", exp_owned)) or 0.0
+        total_used = inv_amount + exp_amount
+        percent = min(100.0, round(total_used / p.budget * 100, 1)) if p.budget and p.budget > 0 else None
+        items.append({
+            "project": p,
+            "invoice_count": inv_count,
+            "invoice_amount": inv_amount,
+            "expense_count": exp_count,
+            "expense_amount": exp_amount,
+            "total_used": total_used,
+            "percent": percent,
+        })
+    return templates.TemplateResponse(
+        request,
+        "projects.html",
+        context(request, user, page="projects", items=items),
+    )
+
+
+@app.post("/projects")
+async def create_project(request: Request, db: Session = Depends(get_db)):
+    user = require_page_user(request, db)
+    form = await request.form()
+    validate_csrf(request, str(form.get("csrf_token", "")))
+
+    name = str(form.get("name", "")).strip()
+    if not name:
+        flash(request, "项目名称不能为空", "error")
+        return RedirectResponse("/projects", status_code=303)
+    if len(name) > 120:
+        flash(request, "项目名称不能超过 120 个字符", "error")
+        return RedirectResponse("/projects", status_code=303)
+
+    code = str(form.get("code", "")).strip()
+    description = str(form.get("description", "")).strip()
+    raw_budget = str(form.get("budget", "")).strip()
+    budget = None
+    if raw_budget:
+        try:
+            budget = float(raw_budget)
+            if not math.isfinite(budget) or budget < 0 or budget > 1_000_000_000:
+                raise ValueError
+            budget = round(budget, 2)
+        except ValueError:
+            flash(request, "项目预算必须是有效的正数", "error")
+            return RedirectResponse("/projects", status_code=303)
+
+    project = Project(
+        owner_id=user.id,
+        name=name,
+        code=code,
+        budget=budget,
+        description=description,
+        status="active",
+    )
+    db.add(project)
+    db.commit()
+    record_audit(db, request, user, "project.create", "project", project.id, {"name": name, "code": code})
+    flash(request, f"项目「{name}」已创建")
+    return RedirectResponse("/projects", status_code=303)
+
+
+@app.post("/projects/{project_id}/edit")
+async def edit_project(project_id: str, request: Request, db: Session = Depends(get_db)):
+    user = require_page_user(request, db)
+    form = await request.form()
+    validate_csrf(request, str(form.get("csrf_token", "")))
+    project = owned_project(request, db, user, project_id)
+
+    name = str(form.get("name", "")).strip()
+    if not name:
+        flash(request, "项目名称不能为空", "error")
+        return RedirectResponse("/projects", status_code=303)
+    if len(name) > 120:
+        flash(request, "项目名称不能超过 120 个字符", "error")
+        return RedirectResponse("/projects", status_code=303)
+
+    code = str(form.get("code", "")).strip()
+    status = str(form.get("status", "active")).strip()
+    if status not in ("active", "archived"):
+        status = "active"
+    description = str(form.get("description", "")).strip()
+
+    raw_budget = str(form.get("budget", "")).strip()
+    budget = None
+    if raw_budget:
+        try:
+            budget = float(raw_budget)
+            if not math.isfinite(budget) or budget < 0 or budget > 1_000_000_000:
+                raise ValueError
+            budget = round(budget, 2)
+        except ValueError:
+            flash(request, "项目预算必须是有效的正数", "error")
+            return RedirectResponse("/projects", status_code=303)
+
+    project.name = name
+    project.code = code
+    project.budget = budget
+    project.status = status
+    project.description = description
+    db.commit()
+    record_audit(db, request, user, "project.edit", "project", project.id, {"name": name, "status": status})
+    flash(request, f"项目「{name}」已更新")
+    return RedirectResponse("/projects", status_code=303)
+
+
+@app.post("/projects/{project_id}/delete")
+async def delete_project(project_id: str, request: Request, db: Session = Depends(get_db)):
+    user = require_page_user(request, db)
+    form = await request.form()
+    validate_csrf(request, str(form.get("csrf_token", "")))
+    project = owned_project(request, db, user, project_id)
+
+    # 将关联的发票与待开票项脱钩，不级联删除发票数据
+    for inv in db.scalars(select(Invoice).where(Invoice.project_id == project.id)).all():
+        inv.project_id = None
+    for exp in db.scalars(select(ExpenseItem).where(ExpenseItem.project_id == project.id)).all():
+        exp.project_id = None
+
+    db.delete(project)
+    db.commit()
+    record_audit(db, request, user, "project.delete", "project", project_id, {"name": project.name})
+    flash(request, f"项目「{project.name}」已删除，关联发票已解除项目归属")
+    return RedirectResponse("/projects", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# 待开票预录入与核销（Expenses / Pre-invoices）
+# ---------------------------------------------------------------------------
+
+@app.get("/expenses", response_class=HTMLResponse)
+def expenses_page(
+    request: Request,
+    q: str = "",
+    status: str = "",
+    project_id: str = "",
+    page: int = 1,
+    db: Session = Depends(get_db),
+):
+    user = require_page_user(request, db)
+    page = max(page, 1)
+    per_page = 25
+    owned = ExpenseItem.owner_id == user.id if user.role != "admin" else None
+    proj_owned = Project.owner_id == user.id if user.role != "admin" else None
+    inv_owned = Invoice.owner_id == user.id if user.role != "admin" else None
+
+    query = select(ExpenseItem).where(owned)
+    if status:
+        query = query.where(ExpenseItem.status == status)
+    if project_id:
+        query = query.where(ExpenseItem.project_id == project_id)
+    if q:
+        pattern = f"%{q.strip()}%"
+        query = query.where(
+            or_(
+                ExpenseItem.claimant.ilike(pattern),
+                ExpenseItem.expected_seller.ilike(pattern),
+                ExpenseItem.category.ilike(pattern),
+                ExpenseItem.notes.ilike(pattern),
+            )
+        )
+
+    count = db.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0
+    items = list(
+        db.scalars(
+            query.order_by(ExpenseItem.expense_date.desc(), ExpenseItem.created_at.desc())
+            .offset((page - 1) * per_page)
+            .limit(per_page)
+        ).all()
+    )
+    pages = max(1, (count + per_page - 1) // per_page)
+
+    projects = list(db.scalars(select(Project).where(Project.status == "active", proj_owned).order_by(Project.name.asc())).all())
+    projects_map = {p.id: p for p in db.scalars(select(Project).where(proj_owned)).all()}
+
+    # 查出已核销发票映射
+    reconciled_inv_ids = [item.reconciled_invoice_id for item in items if item.reconciled_invoice_id]
+    invoices_map = {}
+    if reconciled_inv_ids:
+        for inv in db.scalars(select(Invoice).where(Invoice.id.in_(reconciled_inv_ids))).all():
+            invoices_map[inv.id] = inv
+
+    # 统计数字
+    total_pending_count = db.scalar(select(func.count()).select_from(ExpenseItem).where(ExpenseItem.status == "pending", owned)) or 0
+    total_pending_amount = db.scalar(select(func.coalesce(func.sum(ExpenseItem.expected_amount), 0.0)).where(ExpenseItem.status == "pending", owned)) or 0.0
+    total_reconciled_count = db.scalar(select(func.count()).select_from(ExpenseItem).where(ExpenseItem.status == "reconciled", owned)) or 0
+
+    # 提供可供直接核销的未核销发票供弹窗快速绑定
+    recent_invoices = list(
+        db.scalars(
+            select(Invoice)
+            .where(inv_owned)
+            .order_by(Invoice.invoice_date.desc(), Invoice.created_at.desc())
+            .limit(30)
+        ).all()
+    )
+
+    return templates.TemplateResponse(
+        request,
+        "expenses.html",
+        context(
+            request,
+            user,
+            page="expenses",
+            items=items,
+            projects=projects,
+            projects_map=projects_map,
+            invoices_map=invoices_map,
+            recent_invoices=recent_invoices,
+            q=q,
+            filter_status=status,
+            selected_project_id=project_id,
+            current_page=page,
+            pages=pages,
+            count=count,
+            total_pending_count=total_pending_count,
+            total_pending_amount=total_pending_amount,
+            total_reconciled_count=total_reconciled_count,
+        ),
+    )
+
+
+@app.post("/expenses")
+async def create_expense(request: Request, db: Session = Depends(get_db)):
+    user = require_page_user(request, db)
+    form = await request.form()
+    validate_csrf(request, str(form.get("csrf_token", "")))
+
+    raw_amount = str(form.get("expected_amount", "")).strip()
+    try:
+        expected_amount = float(raw_amount)
+        if not math.isfinite(expected_amount) or expected_amount <= 0 or expected_amount > 1_000_000_000:
+            raise ValueError
+        expected_amount = round(expected_amount, 2)
+    except ValueError:
+        flash(request, "预计金额必须是有效的正数", "error")
+        return RedirectResponse("/expenses", status_code=303)
+
+    claimant = str(form.get("claimant", "")).strip()
+    category = str(form.get("category", "未分类")).strip() or "未分类"
+    expense_date = str(form.get("expense_date", "")).strip()
+    if not expense_date:
+        expense_date = datetime.now(UTC).strftime("%Y-%m-%d")
+    expected_seller = str(form.get("expected_seller", "")).strip()
+    expected_invoice_date = str(form.get("expected_invoice_date", "")).strip()
+    notes = str(form.get("notes", "")).strip()
+
+    project_id = str(form.get("project_id", "")).strip() or None
+    if project_id:
+        owned_project(request, db, user, project_id)
+
+    expense = ExpenseItem(
+        owner_id=user.id,
+        project_id=project_id,
+        claimant=claimant,
+        expected_amount=expected_amount,
+        category=category,
+        expense_date=expense_date,
+        expected_seller=expected_seller,
+        expected_invoice_date=expected_invoice_date,
+        notes=notes,
+        status="pending",
+    )
+    db.add(expense)
+    db.commit()
+    record_audit(db, request, user, "expense.create", "expense_item", expense.id, {"amount": expected_amount, "claimant": claimant})
+    flash(request, f"待开票项已记录（¥{expected_amount:.2f}）")
+    return RedirectResponse("/expenses", status_code=303)
+
+
+@app.post("/expenses/{expense_id}/edit")
+async def edit_expense(expense_id: str, request: Request, db: Session = Depends(get_db)):
+    user = require_page_user(request, db)
+    form = await request.form()
+    validate_csrf(request, str(form.get("csrf_token", "")))
+    expense = owned_expense(request, db, user, expense_id)
+
+    raw_amount = str(form.get("expected_amount", "")).strip()
+    try:
+        expected_amount = float(raw_amount)
+        if not math.isfinite(expected_amount) or expected_amount <= 0 or expected_amount > 1_000_000_000:
+            raise ValueError
+        expected_amount = round(expected_amount, 2)
+    except ValueError:
+        flash(request, "预计金额必须是有效的正数", "error")
+        return RedirectResponse("/expenses", status_code=303)
+
+    claimant = str(form.get("claimant", "")).strip()
+    category = str(form.get("category", "未分类")).strip() or "未分类"
+    expense_date = str(form.get("expense_date", "")).strip()
+    expected_seller = str(form.get("expected_seller", "")).strip()
+    expected_invoice_date = str(form.get("expected_invoice_date", "")).strip()
+    notes = str(form.get("notes", "")).strip()
+
+    project_id = str(form.get("project_id", "")).strip() or None
+    if project_id:
+        owned_project(request, db, user, project_id)
+
+    expense.expected_amount = expected_amount
+    expense.claimant = claimant
+    expense.category = category
+    expense.expense_date = expense_date
+    expense.expected_seller = expected_seller
+    expense.expected_invoice_date = expected_invoice_date
+    expense.project_id = project_id
+    expense.notes = notes
+    db.commit()
+    record_audit(db, request, user, "expense.edit", "expense_item", expense.id)
+    flash(request, "待开票项已更新")
+    return RedirectResponse("/expenses", status_code=303)
+
+
+@app.post("/expenses/{expense_id}/reconcile")
+async def reconcile_expense(expense_id: str, request: Request, db: Session = Depends(get_db)):
+    user = require_page_user(request, db)
+    form = await request.form()
+    validate_csrf(request, str(form.get("csrf_token", "")))
+    expense = owned_expense(request, db, user, expense_id)
+
+    invoice_id = str(form.get("invoice_id", "")).strip()
+    if not invoice_id:
+        flash(request, "请选择需要核销的发票", "error")
+        return RedirectResponse("/expenses", status_code=303)
+
+    invoice = owned_invoice(request, db, user, invoice_id)
+
+    # 解除该发票之前绑定的待开票项
+    for old_exp in db.scalars(select(ExpenseItem).where(ExpenseItem.reconciled_invoice_id == invoice.id)).all():
+        if old_exp.id != expense.id:
+            old_exp.reconciled_invoice_id = None
+            old_exp.status = "pending"
+            old_exp.reconciled_at = None
+
+    expense.reconciled_invoice_id = invoice.id
+    expense.status = "reconciled"
+    expense.reconciled_at = utcnow()
+
+    # 如果发票没有指定项目，而预录项指定了项目，则自动把发票挂靠到该项目
+    if not invoice.project_id and expense.project_id:
+        invoice.project_id = expense.project_id
+
+    db.commit()
+    diff_msg = ""
+    if invoice.total_amount is not None:
+        diff = invoice.total_amount - expense.expected_amount
+        if abs(diff) > 0.009:
+            diff_msg = f"（预估 ¥{expense.expected_amount:.2f}，实开 ¥{invoice.total_amount:.2f}，差异 ¥{diff:+.2f}）"
+    record_audit(db, request, user, "expense.reconcile", "expense_item", expense.id, {"invoice_id": invoice.id})
+    flash(request, f"已成功核销发票 {invoice.invoice_number or invoice.original_name}{diff_msg}")
+    return RedirectResponse("/expenses", status_code=303)
+
+
+@app.post("/expenses/{expense_id}/unreconcile")
+async def unreconcile_expense(expense_id: str, request: Request, db: Session = Depends(get_db)):
+    user = require_page_user(request, db)
+    form = await request.form()
+    validate_csrf(request, str(form.get("csrf_token", "")))
+    expense = owned_expense(request, db, user, expense_id)
+
+    expense.reconciled_invoice_id = None
+    expense.status = "pending"
+    expense.reconciled_at = None
+    db.commit()
+    record_audit(db, request, user, "expense.unreconcile", "expense_item", expense.id)
+    flash(request, "已取消核销关联")
+    return RedirectResponse("/expenses", status_code=303)
+
+
+@app.post("/expenses/{expense_id}/delete")
+async def delete_expense(expense_id: str, request: Request, db: Session = Depends(get_db)):
+    user = require_page_user(request, db)
+    form = await request.form()
+    validate_csrf(request, str(form.get("csrf_token", "")))
+    expense = owned_expense(request, db, user, expense_id)
+
+    db.delete(expense)
+    db.commit()
+    record_audit(db, request, user, "expense.delete", "expense_item", expense.id)
+    flash(request, "待开票项已删除")
+    return RedirectResponse("/expenses", status_code=303)

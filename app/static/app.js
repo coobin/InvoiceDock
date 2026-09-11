@@ -223,6 +223,27 @@
       document.body.append(form);
       form.submit();
     });
+    const batchProjectDialog = document.getElementById('batch-project-dialog');
+    one('[data-dialog-open="batch-project-dialog"]')?.addEventListener('click', (event) => {
+      const ids = guardSelection();
+      if (!ids) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        batchProjectDialog?.close();
+        return;
+      }
+      const container = batchProjectDialog?.querySelector('form');
+      if (container) {
+        container.querySelectorAll('input[name="invoice_ids"]').forEach((el) => el.remove());
+        ids.forEach((id) => {
+          const inp = document.createElement('input');
+          inp.type = 'hidden';
+          inp.name = 'invoice_ids';
+          inp.value = id;
+          container.append(inp);
+        });
+      }
+    });
   }
 
   const printForm = one('[data-print-form]');

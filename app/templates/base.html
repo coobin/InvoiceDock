@@ -17,6 +17,9 @@
     </a>
     <nav class="process-nav" aria-label="主要导航">
       <span class="nav-caption">票据流水</span>
+      <a href="/expenses" class="{{ 'active' if page == 'expenses' else '' }}">
+        <b>待</b><span>待开票<small>预录入与核销</small></span>
+      </a>
       <a href="/mailboxes" class="{{ 'active' if page == 'mailboxes' else '' }}">
         <b>收</b><span>邮箱收票<small>IMAP 自动归集</small></span>
       </a>
@@ -28,6 +31,9 @@
       </a>
       <a href="/print" class="{{ 'active' if page == 'print' else '' }}">
         <b>印</b><span>打印排版<small>A4 省纸拼版</small></span>
+      </a>
+      <a href="/projects" class="{{ 'active' if page == 'projects' else '' }}">
+        <b>项</b><span>项目管理<small>预算与归集</small></span>
       </a>
       <a href="/titles" class="{{ 'active' if page == 'titles' else '' }}">
         <b>抬</b><span>收票抬头<small>预设与个人新增</small></span>

@@ -40,6 +40,22 @@ class User(Base):
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class Project(Base):
+    """项目实体。支持将发票与待开票项归集到具体项目并进行预算与进度管理。"""
+
+    __tablename__ = "projects"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    owner_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(120), index=True)
+    code: Mapped[str] = mapped_column(String(50), default="", index=True)
+    budget: Mapped[float | None] = mapped_column(Float, nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="active", index=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
 class Invoice(Base):
     __tablename__ = "invoices"
     __table_args__ = (
@@ -55,6 +71,7 @@ class Invoice(Base):
     source: Mapped[str] = mapped_column(String(30), default="upload", index=True)
     source_ref: Mapped[str] = mapped_column(String(500), default="")
     owner_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True)
 
     status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
     verification_method: Mapped[str] = mapped_column(String(30), default="")
@@ -88,6 +105,28 @@ class Invoice(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
     verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class ExpenseItem(Base):
+    """预导入报销项（待开票）。支持在无发票文件时录入预计报销费用，并在发票到达后进行核销关联。"""
+
+    __tablename__ = "expense_items"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    owner_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True)
+    claimant: Mapped[str] = mapped_column(String(120), default="", index=True)
+    expected_amount: Mapped[float] = mapped_column(Float, default=0.0)
+    category: Mapped[str] = mapped_column(String(80), default="未分类", index=True)
+    expense_date: Mapped[str] = mapped_column(String(20), default="", index=True)
+    expected_seller: Mapped[str] = mapped_column(String(255), default="")
+    expected_invoice_date: Mapped[str] = mapped_column(String(20), default="")
+    notes: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(30), default="pending", index=True)  # pending, reconciled, cancelled
+    reconciled_invoice_id: Mapped[str | None] = mapped_column(ForeignKey("invoices.id", ondelete="SET NULL"), nullable=True, index=True)
+    reconciled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
 class Mailbox(Base):

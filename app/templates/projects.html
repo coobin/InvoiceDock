@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}项目管理 · {{ app_name }}{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div>
+    <span class="eyebrow">PROJECT MANAGEMENT / 项目管理</span>
+    <h1>分项目归集与预算管理</h1>
+    <p>将发票与待开票项归集到客户项目、业务活动或部门预算中心，清晰掌握各项目的费用支出进度。</p>
+  </div>
+  <button class="button primary" type="button" data-dialog-open="project-dialog">＋ 新建项目</button>
+</header>
+
+{% if items %}
+<div class="project-grid">
+  {% for item in items %}
+  {% set p = item.project %}
+  <article class="project-card {{ 'archived' if p.status == 'archived' else '' }}">
+    <div class="project-card-head">
+      <div>
+        <strong>{{ p.name }}</strong>
+        {% if p.code %}<span class="mono">{{ p.code }}</span>{% endif %}
+      </div>
+      <span class="status {{ 'muted' if p.status == 'archived' else 'verified' }}">{{ '已归档' if p.status == 'archived' else '进行中' }}</span>
+    </div>
+
+    {% if p.description %}<p class="project-desc">{{ p.description }}</p>{% endif %}
+
+    <div class="project-numbers">
+      <div><small>已到发票</small><strong>{{ item.invoice_count }} 张</strong><em>¥ {{ '%.2f'|format(item.invoice_amount) }}</em></div>
+      <div><small>待开票预录</small><strong>{{ item.expense_count }} 笔</strong><em>¥ {{ '%.2f'|format(item.expense_amount) }}</em></div>
+      <div><small>合计支出</small><strong>¥ {{ '%.2f'|format(item.total_used) }}</strong>{% if p.budget %}<small>预算 ¥ {{ '%.2f'|format(p.budget) }}</small>{% else %}<small>未设预算</small>{% endif %}</div>
+    </div>
+
+    {% if item.percent is not none %}
+    <div class="project-progress">
+      <div class="progress-bar-track">
+        <div class="progress-bar-fill {{ 'danger' if item.percent > 100 else ('warn' if item.percent > 85 else '') }}" style="width: {{ [item.percent, 100]|min }}%"></div>
+      </div>
+      <div class="progress-label"><span>预算消耗</span><strong>{{ item.percent }}%</strong></div>
+    </div>
+    {% endif %}
+
+    <div class="project-card-foot">
+      <a class="button secondary small" href="/invoices?project_id={{ p.id }}">查看发票台账 →</a>
+      <a class="button secondary small" href="/expenses?project_id={{ p.id }}">查看待开票 →</a>
+      <button class="button secondary small" type="button" data-dialog-open="edit-project-dialog-{{ p.id }}">编辑</button>
+      <form action="/projects/{{ p.id }}/delete" method="post" data-confirm="确定删除该项目？关联的发票与待开票记录不会被删除，仅解除项目关联。" style="display:inline;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+        <button class="button danger small" type="submit">删除</button>
+      </form>
+    </div>
+  </article>
+
+  <dialog id="edit-project-dialog-{{ p.id }}" class="dialog">
+    <form action="/projects/{{ p.id }}/edit" method="post" class="dialog-card">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <div class="dialog-head">
+        <div><span class="eyebrow">EDIT PROJECT</span><h2>编辑项目</h2></div>
+        <button type="button" class="icon-button" data-dialog-close aria-label="关闭">×</button>
+      </div>
+      <div class="form-grid two">
+        <label class="span-2">项目名称<input name="name" required value="{{ p.name }}" placeholder="例如：2026产品线升级"></label>
+        <label>项目编号<input name="code" class="mono" value="{{ p.code }}" placeholder="例如：PRJ-2026-001"></label>
+        <label>项目状态
+          <select name="status">
+            <option value="active" {{ 'selected' if p.status == 'active' else '' }}>进行中</option>
+            <option value="archived" {{ 'selected' if p.status == 'archived' else '' }}>已归档</option>
+          </select>
+        </label>
+        <label class="span-2">预算金额（元，可选）<input type="number" step="0.01" name="budget" value="{{ p.budget if p.budget is not none else '' }}" placeholder="例如：50000.00"></label>
+        <label class="span-2">备注说明<textarea name="description" rows="3" placeholder="项目目标、成员或核算范围">{{ p.description }}</textarea></label>
+      </div>
+      <div class="head-actions" style="margin-top:16px; justify-content:space-between;">
+        <button class="button primary" type="submit">保存修改</button>
+      </div>
+    </form>
+  </dialog>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty">
+  <b>项</b>
+  <h3>还没有建立项目</h3>
+  <p>点击“新建项目”开始为你的业务或活动归集发票，实现预算管控。</p>
+  <button class="button primary" type="button" data-dialog-open="project-dialog">创建第一个项目</button>
+</div>
+{% endif %}
+
+<dialog id="project-dialog" class="dialog">
+  <form action="/projects" method="post" class="dialog-card">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <div class="dialog-head">
+      <div><span class="eyebrow">NEW PROJECT</span><h2>新建项目</h2></div>
+      <button type="button" class="icon-button" data-dialog-close aria-label="关闭">×</button>
+    </div>
+    <div class="form-grid two">
+      <label class="span-2">项目名称<input name="name" required placeholder="例如：客户A定制开发 / 2026行业展会"></label>
+      <label>项目编号（可选）<input name="code" class="mono" placeholder="例如：PRJ-2026-001"></label>
+      <label>预算金额（元，可选）<input type="number" step="0.01" name="budget" placeholder="例如：30000.00"></label>
+      <label class="span-2">备注说明<textarea name="description" rows="3" placeholder="填写项目周期、核算要求等"></textarea></label>
+    </div>
+    <button class="button primary wide" type="submit" style="margin-top:14px;">保存项目</button>
+  </form>
+</dialog>
+{% endblock %}

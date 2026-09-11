@@ -243,6 +243,9 @@ def init_db() -> None:
         columns = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(invoices)")}
         if "title_warning" not in columns:
             conn.exec_driver_sql("ALTER TABLE invoices ADD COLUMN title_warning TEXT NOT NULL DEFAULT ''")
+        if "project_id" not in columns:
+            conn.exec_driver_sql("ALTER TABLE invoices ADD COLUMN project_id VARCHAR(36) REFERENCES projects(id)")
+        conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_invoices_project_id ON invoices (project_id)")
         job_log_columns = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(job_logs)")}
         if "user_id" not in job_log_columns:
             conn.exec_driver_sql("ALTER TABLE job_logs ADD COLUMN user_id VARCHAR(36)")

@@ -576,3 +576,27 @@ label input, label select, label textarea { display: block; margin-top: 5px; col
 .title-card dd { margin: 0; color: #2c3d47; overflow-wrap: anywhere; }
 .title-table { min-width: 720px; }
 .row-actions { text-align: right; white-space: nowrap; }
+
+/* Project Management & Expense Ledger */
+.project-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 18px; margin-bottom: 32px; }
+.project-card { display: flex; flex-direction: column; padding: 22px; background: #fff; border: 1px solid var(--rule); border-radius: 8px; box-shadow: var(--shadow); transition: transform .16s ease, border-color .16s ease; }
+.project-card:hover { transform: translateY(-2px); border-color: var(--carbon); }
+.project-card.archived { opacity: .72; background: #fbfcfe; }
+.project-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
+.project-card-head strong { font-size: 16px; font-weight: 700; color: var(--ink); }
+.project-card-head .mono { display: inline-block; margin-left: 6px; padding: 2px 6px; background: var(--paper-blue); color: var(--carbon-dark); border-radius: 4px; font-size: 11px; }
+.project-desc { font-size: 12px; color: var(--ink-soft); margin-bottom: 16px; line-height: 1.5; }
+.project-numbers { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 14px; background: var(--paper); border-radius: 6px; margin-bottom: 16px; }
+.project-numbers > div { display: flex; flex-direction: column; gap: 2px; }
+.project-numbers small { font-size: 10px; color: var(--ink-soft); }
+.project-numbers strong { font-size: 14px; font-weight: 700; }
+.project-numbers em { font-style: normal; font-size: 11px; color: var(--carbon); }
+.project-progress { margin-bottom: 18px; }
+.progress-bar-track { height: 8px; background: var(--rule); border-radius: 4px; overflow: hidden; }
+.progress-bar-fill { height: 100%; background: var(--verified); border-radius: 4px; transition: width .3s ease; }
+.progress-bar-fill.warn { background: var(--amber); }
+.progress-bar-fill.danger { background: var(--seal); }
+.progress-label { display: flex; justify-content: space-between; margin-top: 6px; font-size: 11px; color: var(--ink-soft); }
+.progress-label strong { color: var(--ink); }
+.project-card-foot { display: flex; gap: 8px; margin-top: auto; padding-top: 14px; border-top: 1px dashed var(--rule); align-items: center; flex-wrap: wrap; }
+

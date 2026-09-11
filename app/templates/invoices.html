@@ -3,7 +3,7 @@
 {% block content %}
 <header class="page-head">
   <div><span class="eyebrow">INVOICE LEDGER / 票据台账</span><h1>发票查验与复核</h1><p>{{ count }} 张发票；双源一致只代表字段交叉验证，税务结果才标记为“已查验”。</p></div>
-  <div class="head-actions"><span class="batch-count">已选 <b data-selected-count>0</b> 张</span><a class="button secondary" href="/export.xlsx?q={{ q|urlencode }}&status={{ filter_status }}&source={{ source }}">导出 Excel</a><button class="button secondary" type="button" data-print-selected>打印排版</button><button class="button secondary" type="button" data-export-selected>导出原始文件</button><button class="button danger" type="button" data-delete-selected>删除选中</button><a class="button primary" href="/upload">＋ 导入发票</a><input type="hidden" data-batch-csrf value="{{ csrf_token(request) }}"></div>
+  <div class="head-actions"><span class="batch-count">已选 <b data-selected-count>0</b> 张</span><a class="button secondary" href="/export.xlsx?q={{ q|urlencode }}&status={{ filter_status }}&source={{ source }}&project_id={{ selected_project_id }}">导出 Excel</a><button class="button secondary" type="button" data-print-selected>打印排版</button><button class="button secondary" type="button" data-export-selected>导出原始文件</button><button class="button secondary" type="button" data-dialog-open="batch-project-dialog">设置项目</button><button class="button danger" type="button" data-delete-selected>删除选中</button><a class="button primary" href="/upload">＋ 导入发票</a><input type="hidden" data-batch-csrf value="{{ csrf_token(request) }}"></div>
 </header>
 <form class="control-bar" method="get" action="/invoices">
   <label class="search"><span>⌕</span><input name="q" value="{{ q }}" placeholder="搜索票号、销售方、文件名"></label>
@@ -11,22 +11,33 @@
     <option value="">全部状态</option>
     {% for key, meta in status_meta.items() %}<option value="{{ key }}" {{ 'selected' if filter_status == key else '' }}>{{ meta[0] }}</option>{% endfor %}
   </select>
+  <select name="project_id" aria-label="项目筛选">
+    <option value="">全部项目</option>
+    {% for p in projects %}<option value="{{ p.id }}" {{ 'selected' if selected_project_id == p.id else '' }}>{{ p.name }}</option>{% endfor %}
+  </select>
   <select name="source" aria-label="来源筛选">
     <option value="">全部来源</option><option value="upload" {{ 'selected' if source == 'upload' else '' }}>手动上传</option><option value="email" {{ 'selected' if source == 'email' else '' }}>邮箱附件</option><option value="email-link" {{ 'selected' if source == 'email-link' else '' }}>邮件链接</option>
   </select>
   <button class="button secondary" type="submit">筛选</button>
-  {% if q or filter_status or source %}<a class="clear-filter" href="/invoices">清除</a>{% endif %}
+  {% if q or filter_status or source or selected_project_id %}<a class="clear-filter" href="/invoices">清除</a>{% endif %}
 </form>
 <section class="table-panel">
   <table class="data-table invoice-table">
-    <thead><tr><th class="check"><input type="checkbox" data-select-all aria-label="全选"></th><th>发票</th><th>销售方 / 分类</th><th>开票日期</th><th class="money">价税合计</th><th>验证路径</th><th>状态</th><th></th></tr></thead>
+    <thead><tr><th class="check"><input type="checkbox" data-select-all aria-label="全选"></th><th>发票</th><th>销售方 / 分类 / 项目</th><th>开票日期</th><th class="money">价税合计</th><th>验证路径</th><th>状态</th><th></th></tr></thead>
     <tbody>
     {% for item in items %}
       {% set meta = status_meta.get(item.status, (item.status, 'muted')) %}
+      {% set proj = projects_map.get(item.project_id) if item.project_id else None %}
       <tr>
         <td class="check"><input type="checkbox" value="{{ item.id }}" data-invoice-select aria-label="选择 {{ item.original_name }}"></td>
         <td><a class="invoice-identity" href="/invoices/{{ item.id }}"><span class="file-glyph">{{ item.original_name.split('.')[-1][:3]|upper }}</span><span><strong>{{ item.invoice_number or '待提取票号' }}</strong><small>{{ item.invoice_code or item.original_name }}</small></span></a></td>
-        <td><strong class="seller">{{ item.seller_name or '销售方待识别' }}</strong><small class="category-chip">{{ item.category }}</small></td>
+        <td>
+          <strong class="seller">{{ item.seller_name or '销售方待识别' }}</strong>
+          <div style="display:flex; gap:4px; margin-top:2px; flex-wrap:wrap;">
+            <small class="category-chip">{{ item.category }}</small>
+            {% if proj %}<small class="category-chip" style="background:#dceff7; color:#0d5d8c;">{{ proj.name }}</small>{% endif %}
+          </div>
+        </td>
         <td><span class="mono">{{ item.invoice_date or '—' }}</span><small>{{ item.source.replace('email-link','邮件链接').replace('email','邮箱').replace('upload','上传') }}</small></td>
         <td class="money"><strong>{{ '¥ %.2f'|format(item.total_amount) if item.total_amount is not none else '—' }}</strong><small>{{ '税额 %.2f'|format(item.tax_amount) if item.tax_amount is not none else '' }}</small></td>
         <td><span class="method method-{{ item.verification_method or 'none' }}">{{ {'kingdee':'税务发票云','piaozone':'税务发票云','dual':'OCR + LLM','ocr':'本地 OCR'}.get(item.verification_method, '等待处理') }}</span><small>{{ '%.0f%% 一致'|format(item.confidence * 100) if item.verification_method == 'dual' else '' }}</small></td>
@@ -38,6 +49,24 @@
   </table>
 </section>
 {% if pages > 1 %}<nav class="pagination" aria-label="分页">
-  <a class="{{ 'disabled' if current_page <= 1 else '' }}" href="?q={{ q|urlencode }}&status={{ filter_status }}&source={{ source }}&page={{ current_page - 1 }}">← 上一页</a><span>第 {{ current_page }} / {{ pages }} 页</span><a class="{{ 'disabled' if current_page >= pages else '' }}" href="?q={{ q|urlencode }}&status={{ filter_status }}&source={{ source }}&page={{ current_page + 1 }}">下一页 →</a>
+  <a class="{{ 'disabled' if current_page <= 1 else '' }}" href="?q={{ q|urlencode }}&status={{ filter_status }}&source={{ source }}&project_id={{ selected_project_id }}&page={{ current_page - 1 }}">← 上一页</a><span>第 {{ current_page }} / {{ pages }} 页</span><a class="{{ 'disabled' if current_page >= pages else '' }}" href="?q={{ q|urlencode }}&status={{ filter_status }}&source={{ source }}&project_id={{ selected_project_id }}&page={{ current_page + 1 }}">下一页 →</a>
 </nav>{% endif %}
+
+<dialog id="batch-project-dialog" class="dialog">
+  <form action="/invoices/batch-assign-project" method="post" class="dialog-card">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input type="hidden" name="ids" data-batch-project-ids value="">
+    <div class="dialog-head"><div><span class="eyebrow">BATCH ASSIGN PROJECT</span><h2>设置所属项目</h2></div><button type="button" class="icon-button" data-dialog-close aria-label="关闭">×</button></div>
+    <p>为已选中的发票批量分配所属项目（若选择留空则清除项目关联）：</p>
+    <label>所属项目
+      <select name="project_id">
+        <option value="">-- 无所属项目 (清除关联) --</option>
+        {% for p in projects %}
+        <option value="{{ p.id }}">{{ p.name }}{% if p.code %} ({{ p.code }}){% endif %}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button class="button primary wide" type="submit" style="margin-top:14px;">确认批量更新</button>
+  </form>
+</dialog>
 {% endblock %}

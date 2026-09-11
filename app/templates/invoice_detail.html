@@ -34,11 +34,50 @@
       <div class="form-grid two">
         <label>发票类型<input name="invoice_type" value="{{ invoice.invoice_type }}" {{ 'readonly' if provider_verified else '' }}></label>
         <label>费用分类<select name="category">{% for value in ['未分类','交通出行','住宿','餐饮','办公用品','通讯','物流'] %}<option {{ 'selected' if invoice.category == value else '' }}>{{ value }}</option>{% endfor %}</select></label>
+        <label>所属项目
+          <select name="project_id">
+            <option value="">-- 无所属项目 --</option>
+            {% for p in projects %}
+            <option value="{{ p.id }}" {{ 'selected' if invoice.project_id == p.id else '' }}>{{ p.name }}{% if p.code %} ({{ p.code }}){% endif %}</option>
+            {% endfor %}
+          </select>
+        </label>
         <label>发票代码<input class="mono" name="invoice_code" value="{{ invoice.invoice_code }}" {{ 'readonly' if provider_verified else '' }}></label>
         <label>发票号码<input class="mono" name="invoice_number" value="{{ invoice.invoice_number }}" {{ 'readonly' if provider_verified else '' }}></label>
         <label>开票日期<input type="date" name="invoice_date" value="{{ invoice.invoice_date }}" {{ 'readonly' if provider_verified else '' }}></label>
         <label>校验码<input class="mono" name="check_code" value="{{ invoice.check_code }}" {{ 'readonly' if provider_verified else '' }}></label>
       </div>
+
+      {% if reconciled_expense %}
+      <div class="form-divider"><span>待开票核销关联</span></div>
+      <div class="notice" style="background:#eaf6ee; border:1px solid #c3e6cb; padding:12px 14px; border-radius:6px; margin-bottom:12px;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div>
+            <strong>已核销待开票项：{{ reconciled_expense.claimant }}</strong>（发生日期：{{ reconciled_expense.expense_date }}）
+            <div><small>预估金额：¥ {{ '%.2f'|format(reconciled_expense.expected_amount) }} · 实开金额：¥ {{ '%.2f'|format(invoice.total_amount) if invoice.total_amount is not none else '0.00' }}</small></div>
+            {% if invoice.total_amount is not none %}
+            {% set diff = invoice.total_amount - reconciled_expense.expected_amount %}
+            {% if abs(diff) > 0.009 %}<small class="{{ 'danger-text' if diff > 0 else 'good' }}">差额：{{ '%+.2f'|format(diff) }} 元</small>{% endif %}
+            {% endif %}
+          </div>
+          <label style="display:flex; align-items:center; gap:6px; margin:0; cursor:pointer;">
+            <input type="checkbox" name="unreconcile_expense" value="true" style="width:auto; margin:0;">
+            <span>解除核销</span>
+          </label>
+        </div>
+      </div>
+      {% elif available_expenses %}
+      <div class="form-divider"><span>核销待开票项</span></div>
+      <label>关联已有待开票预录（可选）
+        <select name="reconcile_expense_id">
+          <option value="">-- 暂不关联待开票项 --</option>
+          {% for exp in available_expenses %}
+          <option value="{{ exp.id }}">{{ exp.claimant }} · ¥{{ '%.2f'|format(exp.expected_amount) }} · {{ exp.expense_date }} · {{ exp.category }} ({{ exp.expected_seller or '无开票方' }})</option>
+          {% endfor %}
+        </select>
+      </label>
+      {% endif %}
+
       <div class="form-divider"><span>购销双方</span></div>
       <div class="form-grid two">
         <label>销售方名称<input name="seller_name" value="{{ invoice.seller_name }}" {{ 'readonly' if provider_verified else '' }}></label>

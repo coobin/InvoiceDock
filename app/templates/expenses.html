@@ -1,0 +1,239 @@
+{% extends "base.html" %}
+{% block title %}待开票预录 · {{ app_name }}{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div>
+    <span class="eyebrow">PRE-INVOICE LEDGER / 待开票预录</span>
+    <h1>暂无发票的报销预录与核销</h1>
+    <p>费用发生时先记一笔，避免漏记、遗忘；等发票开出并上传后，一键核销关联，闭环管理。</p>
+  </div>
+  <div class="head-actions">
+    <a class="button secondary" href="/export.xlsx?status={{ filter_status }}&project_id={{ selected_project_id }}">导出 Excel 台账</a>
+    <button class="button primary" type="button" data-dialog-open="expense-dialog">＋ 记一笔待开票</button>
+  </div>
+</header>
+
+<section class="ledger-strip" aria-label="待开票概览">
+  <div class="ledger-total">
+    <small>待开票总额</small>
+    <strong>{{ total_pending_count }}</strong><span>笔</span>
+    <em>¥ {{ '%.2f'|format(total_pending_amount) }}</em>
+  </div>
+  <div class="ledger-metric warn">
+    <span>待开票项</span>
+    <strong>{{ total_pending_count }}</strong>
+    <small>尚未关联正式发票</small>
+  </div>
+  <div class="ledger-metric good">
+    <span>已核销项</span>
+    <strong>{{ total_reconciled_count }}</strong>
+    <small>已与发票成功对账</small>
+  </div>
+  <div class="ledger-metric blue">
+    <span>项目归属</span>
+    <strong>{{ projects|length }}</strong>
+    <small>个活跃项目中心</small>
+  </div>
+</section>
+
+<form class="control-bar" method="get" action="/expenses">
+  <label class="search"><span>⌕</span><input name="q" value="{{ q }}" placeholder="搜索报销人、开票方、分类、备注"></label>
+  <select name="status" aria-label="状态筛选">
+    <option value="">全部状态</option>
+    <option value="pending" {{ 'selected' if filter_status == 'pending' else '' }}>待开票</option>
+    <option value="reconciled" {{ 'selected' if filter_status == 'reconciled' else '' }}>已核销</option>
+  </select>
+  <select name="project_id" aria-label="项目筛选">
+    <option value="">全部项目</option>
+    {% for p in projects %}
+    <option value="{{ p.id }}" {{ 'selected' if selected_project_id == p.id else '' }}>{{ p.name }}</option>
+    {% endfor %}
+  </select>
+  <button class="button secondary" type="submit">筛选</button>
+  {% if q or filter_status or selected_project_id %}<a class="clear-filter" href="/expenses">清除</a>{% endif %}
+</form>
+
+<section class="table-panel">
+  <table class="data-table invoice-table">
+    <thead>
+      <tr>
+        <th>报销人 / 费用发生日</th>
+        <th>所属项目</th>
+        <th class="money">预计金额</th>
+        <th>费用分类</th>
+        <th>预计开票方 / 预计开票日</th>
+        <th>核销状态</th>
+        <th>备注</th>
+        <th class="row-actions">操作</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for item in items %}
+      {% set proj = projects_map.get(item.project_id) if item.project_id else None %}
+      {% set rec_inv = invoices_map.get(item.reconciled_invoice_id) if item.reconciled_invoice_id else None %}
+      {% set is_overdue = item.status == 'pending' and item.expected_invoice_date and item.expected_invoice_date < now_str %}
+      <tr>
+        <td>
+          <strong class="seller">{{ item.claimant or '未填报销人' }}</strong>
+          <small class="mono">{{ item.expense_date or '—' }}</small>
+        </td>
+        <td>
+          {% if proj %}
+          <a href="/invoices?project_id={{ proj.id }}"><strong>{{ proj.name }}</strong></a>
+          {% if proj.code %}<small class="mono">{{ proj.code }}</small>{% endif %}
+          {% else %}
+          <span class="muted">未分配项目</span>
+          {% endif %}
+        </td>
+        <td class="money">
+          <strong>¥ {{ '%.2f'|format(item.expected_amount) }}</strong>
+          {% if rec_inv and rec_inv.total_amount is not none %}
+          {% set diff = rec_inv.total_amount - item.expected_amount %}
+          <small class="{{ 'danger-text' if diff > 0 else 'good' }}">实开 ¥{{ '%.2f'|format(rec_inv.total_amount) }}{% if diff != 0 %} ({{ '%+.2f'|format(diff) }}){% endif %}</small>
+          {% endif %}
+        </td>
+        <td><span class="category-chip">{{ item.category }}</span></td>
+        <td>
+          <div>{{ item.expected_seller or '—' }}</div>
+          {% if item.expected_invoice_date %}
+          <small class="mono {{ 'danger-text' if is_overdue else '' }}">预计: {{ item.expected_invoice_date }}{% if is_overdue %} (已逾期){% endif %}</small>
+          {% endif %}
+        </td>
+        <td>
+          {% if item.status == 'reconciled' %}
+          <span class="status verified">已核销</span>
+          {% if rec_inv %}
+          <small><a href="/invoices/{{ rec_inv.id }}">票号: {{ rec_inv.invoice_number or rec_inv.original_name }}</a></small>
+          {% endif %}
+          {% else %}
+          <span class="status review">待开票</span>
+          {% endif %}
+        </td>
+        <td><small class="muted" style="max-width:180px; display:inline-block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ item.notes or '—' }}</small></td>
+        <td class="row-actions">
+          {% if item.status == 'pending' %}
+          <button class="button primary small" type="button" data-dialog-open="reconcile-dialog-{{ item.id }}">核销发票</button>
+          {% else %}
+          <form action="/expenses/{{ item.id }}/unreconcile" method="post" style="display:inline;" data-confirm="确定取消与发票的核销绑定吗？">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+            <button class="text-button" type="submit">取消核销</button>
+          </form>
+          {% endif %}
+          <button class="button secondary small" type="button" data-dialog-open="edit-expense-dialog-{{ item.id }}">编辑</button>
+          <form action="/expenses/{{ item.id }}/delete" method="post" style="display:inline;" data-confirm="确定删除该待开票记录吗？">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+            <button class="button danger small" type="submit">删除</button>
+          </form>
+        </td>
+      </tr>
+
+      <!-- 核销弹窗 -->
+      {% if item.status == 'pending' %}
+      <dialog id="reconcile-dialog-{{ item.id }}" class="dialog">
+        <form action="/expenses/{{ item.id }}/reconcile" method="post" class="dialog-card">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+          <div class="dialog-head">
+            <div><span class="eyebrow">RECONCILIATION</span><h2>核销发票</h2></div>
+            <button type="button" class="icon-button" data-dialog-close aria-label="关闭">×</button>
+          </div>
+          <p>正在为 <strong>{{ item.claimant or '报销项' }}</strong>（预计金额：<strong>¥ {{ '%.2f'|format(item.expected_amount) }}</strong>）关联已上传的发票：</p>
+          <label>选择对应发票
+            <select name="invoice_id" required>
+              <option value="">-- 请选择名下发票 --</option>
+              {% for inv in recent_invoices %}
+              <option value="{{ inv.id }}">
+                {{ inv.seller_name or '未知销售方' }} · ¥{{ '%.2f'|format(inv.total_amount) if inv.total_amount is not none else '0.00' }} · {{ inv.invoice_number or inv.original_name }} ({{ inv.invoice_date or inv.created_at.strftime('%m-%d') }})
+              </option>
+              {% endfor %}
+            </select>
+          </label>
+          <p class="muted" style="font-size:11px; margin-top:8px;">如果尚未上传发票，可以先到“<a href="/upload" target="_blank">手动导入</a>”或等待邮箱收取后再回来核销。</p>
+          <button class="button primary wide" type="submit" style="margin-top:14px;">确认核销绑定</button>
+        </form>
+      </dialog>
+      {% endif %}
+
+      <!-- 编辑弹窗 -->
+      <dialog id="edit-expense-dialog-{{ item.id }}" class="dialog">
+        <form action="/expenses/{{ item.id }}/edit" method="post" class="dialog-card">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+          <div class="dialog-head">
+            <div><span class="eyebrow">EDIT PRE-INVOICE</span><h2>编辑待开票项</h2></div>
+            <button type="button" class="icon-button" data-dialog-close aria-label="关闭">×</button>
+          </div>
+          <div class="form-grid two">
+            <label>报销人<input name="claimant" value="{{ item.claimant }}" placeholder="例如：张三"></label>
+            <label>所属项目
+              <select name="project_id">
+                <option value="">-- 不指定项目 --</option>
+                {% for p in projects %}
+                <option value="{{ p.id }}" {{ 'selected' if item.project_id == p.id else '' }}>{{ p.name }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label>预计金额（元，必填）<input type="number" step="0.01" name="expected_amount" required value="{{ item.expected_amount }}"></label>
+            <label>费用分类
+              <select name="category">
+                {% for c in ['未分类','交通出行','住宿','餐饮','办公用品','通讯','物流'] %}
+                <option value="{{ c }}" {{ 'selected' if item.category == c else '' }}>{{ c }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label>费用发生日期<input type="date" name="expense_date" value="{{ item.expense_date }}"></label>
+            <label>预计开票日期（可选）<input type="date" name="expected_invoice_date" value="{{ item.expected_invoice_date }}"></label>
+            <label class="span-2">预计开票方 / 供应商（可选）<input name="expected_seller" value="{{ item.expected_seller }}" placeholder="例如：XX酒店 / XX车队"></label>
+            <label class="span-2">备注说明<textarea name="notes" rows="2" placeholder="填写费用详情或特殊事项">{{ item.notes }}</textarea></label>
+          </div>
+          <button class="button primary wide" type="submit" style="margin-top:14px;">保存修改</button>
+        </form>
+      </dialog>
+    {% else %}
+      <tr><td colspan="8"><div class="empty small"><b>待</b><h3>没有符合条件的待开票记录</h3><p>点击上方“＋ 记一笔待开票”录入首笔尚未开具发票的支出。</p></div></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+{% if pages > 1 %}
+<nav class="pagination" aria-label="分页">
+  <a class="{{ 'disabled' if current_page <= 1 else '' }}" href="?q={{ q|urlencode }}&status={{ filter_status }}&project_id={{ selected_project_id }}&page={{ current_page - 1 }}">← 上一页</a>
+  <span>第 {{ current_page }} / {{ pages }} 页</span>
+  <a class="{{ 'disabled' if current_page >= pages else '' }}" href="?q={{ q|urlencode }}&status={{ filter_status }}&project_id={{ selected_project_id }}&page={{ current_page + 1 }}">下一页 →</a>
+</nav>
+{% endif %}
+
+<!-- 新增待开票弹窗 -->
+<dialog id="expense-dialog" class="dialog">
+  <form action="/expenses" method="post" class="dialog-card">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <div class="dialog-head">
+      <div><span class="eyebrow">NEW PRE-INVOICE</span><h2>新增待开票项</h2></div>
+      <button type="button" class="icon-button" data-dialog-close aria-label="关闭">×</button>
+    </div>
+    <div class="form-grid two">
+      <label>报销人<input name="claimant" placeholder="例如：张三" value="{{ user.display_name or user.username }}"></label>
+      <label>所属项目
+        <select name="project_id">
+          <option value="">-- 不指定项目 --</option>
+          {% for p in projects %}
+          <option value="{{ p.id }}" {{ 'selected' if selected_project_id == p.id else '' }}>{{ p.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>预计金额（元，必填）<input type="number" step="0.01" name="expected_amount" required placeholder="0.00"></label>
+      <label>费用分类
+        <select name="category">
+          {% for c in ['餐饮','交通出行','住宿','办公用品','通讯','物流','未分类'] %}
+          <option value="{{ c }}">{{ c }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>费用发生日期<input type="date" name="expense_date" required></label>
+      <label>预计开票日期（可选）<input type="date" name="expected_invoice_date" placeholder="超期将提醒"></label>
+      <label class="span-2">预计开票方 / 供应商（可选）<input name="expected_seller" placeholder="例如：XX大酒店 / 某某办公旗舰店"></label>
+      <label class="span-2">备注说明<textarea name="notes" rows="2" placeholder="说明费用用途、审批流水号等"></textarea></label>
+    </div>
+    <button class="button primary wide" type="submit" style="margin-top:14px;">保存记录</button>
+  </form>
+</dialog>
+{% endblock %}

@@ -11,7 +11,7 @@ from pypdf import PageObject, PdfReader, PdfWriter, Transformation
 from pypdf.generic import NameObject, RectangleObject
 
 from app.config import get_settings
-from app.models import Invoice
+from app.models import ExpenseItem, Invoice, Project
 from app.services.extractor import render_first_page
 
 A4_WIDTH = 595.28
@@ -115,20 +115,28 @@ def make_print_pdf(invoices: list[Invoice], per_page: int = 2) -> bytes:
     return output.getvalue()
 
 
-def make_invoice_workbook(invoices: list[Invoice]) -> bytes:
+def make_invoice_workbook(
+    invoices: list[Invoice],
+    projects_map: dict[str, Project] | None = None,
+    expenses: list[ExpenseItem] | None = None,
+    invoices_map: dict[str, Invoice] | None = None,
+) -> bytes:
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "发票台账"
     headers = [
         "状态", "查验方式", "发票类型", "发票代码", "发票号码", "开票日期", "销售方", "销售方税号",
         "购买方", "购买方税号", "不含税金额", "税额", "价税合计", "分类", "来源", "抬头警示", "原文件名", "入库时间",
+        "所属项目", "项目编号",
     ]
     sheet.append(headers)
     for cell in sheet[1]:
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = PatternFill("solid", fgColor="173B5E")
         cell.alignment = Alignment(horizontal="center")
+    proj_map = projects_map or {}
     for item in invoices:
+        proj = proj_map.get(item.project_id) if item.project_id else None
         row = [
             item.status,
             item.verification_method,
@@ -148,13 +156,58 @@ def make_invoice_workbook(invoices: list[Invoice]) -> bytes:
             item.title_warning,
             item.original_name,
             item.created_at.isoformat(sep=" ", timespec="seconds"),
+            proj.name if proj else "",
+            proj.code if proj else "",
         ]
         sheet.append([_excel_safe(value) for value in row])
-    widths = [12, 12, 20, 16, 22, 14, 32, 22, 32, 22, 15, 15, 15, 14, 14, 24, 36, 21]
+    widths = [12, 12, 20, 16, 22, 14, 32, 22, 32, 22, 15, 15, 15, 14, 14, 24, 36, 21, 20, 16]
     for index, width in enumerate(widths, start=1):
-        sheet.column_dimensions[chr(64 + index) if index <= 26 else f"A{chr(64 + index - 26)}"].width = width
+        col_letter = chr(64 + index) if index <= 26 else f"A{chr(64 + index - 26)}"
+        sheet.column_dimensions[col_letter].width = width
     sheet.freeze_panes = "A2"
     sheet.auto_filter.ref = sheet.dimensions
+
+    if expenses is not None:
+        sheet2 = workbook.create_sheet(title="待开票预录")
+        exp_headers = [
+            "状态", "所属项目", "报销人", "发生日期", "预计金额", "费用分类", "预计开票方", "预计开票日", "核销发票号", "备注", "创建时间",
+        ]
+        sheet2.append(exp_headers)
+        for cell in sheet2[1]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="2D5A27")
+            cell.alignment = Alignment(horizontal="center")
+        inv_map = invoices_map or {}
+        status_names = {"pending": "待开票", "reconciled": "已核销", "cancelled": "已作废"}
+        for exp in expenses:
+            proj = proj_map.get(exp.project_id) if exp.project_id else None
+            rec_inv = inv_map.get(exp.reconciled_invoice_id) if exp.reconciled_invoice_id else None
+            rec_str = (
+                f"{rec_inv.invoice_number or rec_inv.original_name} (¥{rec_inv.total_amount:.2f})"
+                if rec_inv and rec_inv.total_amount is not None
+                else (rec_inv.invoice_number or rec_inv.original_name if rec_inv else "")
+            )
+            exp_row = [
+                status_names.get(exp.status, exp.status),
+                proj.name if proj else "",
+                exp.claimant,
+                exp.expense_date,
+                exp.expected_amount,
+                exp.category,
+                exp.expected_seller,
+                exp.expected_invoice_date,
+                rec_str,
+                exp.notes,
+                exp.created_at.isoformat(sep=" ", timespec="seconds"),
+            ]
+            sheet2.append([_excel_safe(value) for value in exp_row])
+        exp_widths = [12, 18, 14, 14, 15, 14, 28, 14, 28, 28, 21]
+        for index, width in enumerate(exp_widths, start=1):
+            col_letter = chr(64 + index) if index <= 26 else f"A{chr(64 + index - 26)}"
+            sheet2.column_dimensions[col_letter].width = width
+        sheet2.freeze_panes = "A2"
+        sheet2.auto_filter.ref = sheet2.dimensions
+
     output = BytesIO()
     workbook.save(output)
     return output.getvalue()
