@@ -19,24 +19,69 @@
       <div><dt>邮箱</dt><dd>{{ user.email or '未设置' }}</dd></div>
       <div><dt>角色</dt><dd>{{ '管理员' if user.role == 'admin' else '成员' }}</dd></div>
       <div><dt>登录方式</dt><dd>{{ 'OIDC + 本地密码' if user.oidc_subject and user.password_hash else ('OIDC' if user.oidc_subject else '本地密码') }}</dd></div>
+      <div><dt>通行密钥</dt><dd>{{ passkeys|length }} 个已绑定</dd></div>
     </dl>
   </section>
 
-  <section class="panel password-card">
-    <div class="section-title compact">
-      <div><span class="eyebrow">LOCAL PASSWORD</span><h2>修改登录密码</h2></div>
-    </div>
-    {% if user.password_hash %}
-    <form action="/profile/password" method="post" class="form-stack">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
-      <label>当前密码<input type="password" name="current_password" autocomplete="current-password" maxlength="256" required></label>
-      <label>新密码<input type="password" name="new_password" autocomplete="new-password" minlength="12" maxlength="256" required><small>至少 12 个字符，并同时包含字母和数字。</small></label>
-      <label>确认新密码<input type="password" name="confirm_password" autocomplete="new-password" minlength="12" maxlength="256" required></label>
-      <button class="button primary" type="submit">更新密码</button>
-    </form>
-    {% else %}
-    <div class="empty-state compact"><span>OIDC</span><h3>此账户不使用本地密码</h3><p>请前往组织的身份提供商修改密码和多因素认证设置。</p></div>
-    {% endif %}
-  </section>
+  <div class="profile-stack">
+    <section class="panel passkey-card">
+      <div class="section-title compact">
+        <div>
+          <span class="eyebrow">WEBAUTHN / FIDO2</span>
+          <h2>通行密钥（Passkey）</h2>
+        </div>
+        <button type="button" class="button primary small" id="btn-add-passkey" data-csrf="{{ csrf_token(request) }}">＋ 添加此设备通行密钥</button>
+      </div>
+      <p class="passkey-intro">支持 Touch ID、Face ID、Windows Hello 或 FIDO2 安全密钥。添加后可直接识别设备一键登录，无需输入用户名与密码。</p>
+      
+      {% if passkeys %}
+      <div class="passkey-list">
+        {% for pk in passkeys %}
+        <div class="passkey-item">
+          <div class="passkey-icon" aria-hidden="true">🔑</div>
+          <div class="passkey-details">
+            <strong class="passkey-title">{{ pk.name }}</strong>
+            <div class="passkey-subtext">
+              <span>添加于 {{ pk.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
+              {% if pk.last_used_at %}
+              <span> · 最近使用于 {{ pk.last_used_at.strftime('%Y-%m-%d %H:%M') }}</span>
+              {% else %}
+              <span> · 尚未在此设备登录过</span>
+              {% endif %}
+            </div>
+          </div>
+          <form action="/auth/passkey/{{ pk.id }}/delete" method="post" data-confirm="确定移除该通行密钥「{{ pk.name }}」吗？移除后将无法使用该密钥快捷登录。">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+            <button type="submit" class="button small ghost-danger">移除</button>
+          </form>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="empty-state compact">
+        <span class="empty-icon">🔑</span>
+        <h3>尚未绑定任何通行密钥</h3>
+        <p>点击上方「＋ 添加此设备通行密钥」，将当前设备添加为免密安全凭据。</p>
+      </div>
+      {% endif %}
+    </section>
+
+    <section class="panel password-card">
+      <div class="section-title compact">
+        <div><span class="eyebrow">LOCAL PASSWORD</span><h2>修改登录密码</h2></div>
+      </div>
+      {% if user.password_hash %}
+      <form action="/profile/password" method="post" class="form-stack">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+        <label>当前密码<input type="password" name="current_password" autocomplete="current-password" maxlength="256" required></label>
+        <label>新密码<input type="password" name="new_password" autocomplete="new-password" minlength="12" maxlength="256" required><small>至少 12 个字符，并同时包含字母和数字。</small></label>
+        <label>确认新密码<input type="password" name="confirm_password" autocomplete="new-password" minlength="12" maxlength="256" required></label>
+        <button class="button primary" type="submit">更新密码</button>
+      </form>
+      {% else %}
+      <div class="empty-state compact"><span>OIDC</span><h3>此账户不使用本地密码</h3><p>请前往组织的身份提供商修改密码和多因素认证设置。</p></div>
+      {% endif %}
+    </section>
+  </div>
 </div>
 {% endblock %}

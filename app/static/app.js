@@ -272,4 +272,193 @@
     });
     update();
   }
+
+  // --- 通行密钥（WebAuthn / Passkey）支持 ---
+  const base64urlToBuffer = (base64url) => {
+    const padding = '='.repeat((4 - (base64url.length % 4)) % 4);
+    const base64 = (base64url + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const rawData = window.atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; ++i) {
+      outputArray[i] = rawData.charCodeAt(i);
+    }
+    return outputArray.buffer;
+  };
+
+  const bufferToBase64url = (buffer) => {
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.byteLength; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return window.btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+  };
+
+  // 添加通行密钥（注册绑定）
+  const addPasskeyBtn = one('#btn-add-passkey');
+  if (addPasskeyBtn) {
+    addPasskeyBtn.addEventListener('click', async () => {
+      if (!window.PublicKeyCredential) {
+        window.alert('当前浏览器或运行环境不支持通行密钥 (Passkey / WebAuthn)。请使用现代浏览器（如 Chrome、Safari、Edge）并确保在 HTTPS 或 localhost 环境下访问。');
+        return;
+      }
+      const deviceName = window.prompt('请输入此通行密钥的备注名称（例如：MacBook 指纹、工作电脑、iPhone）：', '我的设备通行密钥');
+      if (deviceName === null) return;
+      const finalName = deviceName.trim() || '我的设备通行密钥';
+
+      addPasskeyBtn.disabled = true;
+      const originalText = addPasskeyBtn.textContent;
+      addPasskeyBtn.textContent = '正在发起注册…';
+
+      try {
+        const resp = await fetch('/auth/passkey/register/options', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({ detail: '获取注册参数失败' }));
+          throw new Error(err.detail || '获取注册参数失败');
+        }
+        const options = await resp.json();
+
+        const creationOptions = PublicKeyCredential.parseCreationOptionsFromJSON
+          ? PublicKeyCredential.parseCreationOptionsFromJSON(options)
+          : {
+              ...options,
+              challenge: base64urlToBuffer(options.challenge),
+              user: {
+                ...options.user,
+                id: base64urlToBuffer(options.user.id),
+              },
+              excludeCredentials: (options.excludeCredentials || []).map((cred) => ({
+                ...cred,
+                id: base64urlToBuffer(cred.id),
+              })),
+            };
+
+        const credential = await navigator.credentials.create({ publicKey: creationOptions });
+        if (!credential) throw new Error('设备未生成通行密钥凭据');
+
+        let credData;
+        if (typeof credential.toJSON === 'function') {
+          credData = credential.toJSON();
+        } else {
+          credData = {
+            id: credential.id,
+            rawId: bufferToBase64url(credential.rawId),
+            type: credential.type,
+            response: {
+              clientDataJSON: bufferToBase64url(credential.response.clientDataJSON),
+              attestationObject: bufferToBase64url(credential.response.attestationObject),
+              transports: credential.response.getTransports ? credential.response.getTransports() : [],
+            },
+          };
+        }
+        credData.name = finalName;
+
+        addPasskeyBtn.textContent = '正在保存凭据…';
+        const verifyResp = await fetch('/auth/passkey/register/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(credData),
+        });
+        const verifyResult = await verifyResp.json().catch(() => ({ detail: '验证失败' }));
+        if (!verifyResp.ok) {
+          throw new Error(verifyResult.detail || '通行密钥注册验证失败');
+        }
+
+        window.location.reload();
+      } catch (err) {
+        if (err.name === 'NotAllowedError') {
+          window.alert('已取消通行密钥创建或操作超时。');
+        } else {
+          window.alert(`添加通行密钥失败：${err.message || err}`);
+        }
+      } finally {
+        addPasskeyBtn.disabled = false;
+        addPasskeyBtn.textContent = originalText;
+      }
+    });
+  }
+
+  // 通行密钥免用户名一键登录
+  const passkeyLoginBtn = one('#btn-passkey-login');
+  if (passkeyLoginBtn) {
+    const doPasskeyLogin = async () => {
+      if (!window.PublicKeyCredential) {
+        window.alert('当前浏览器或运行环境不支持通行密钥 (Passkey / WebAuthn)。请使用支持 WebAuthn 的现代浏览器并在安全连接 (HTTPS/localhost) 下使用。');
+        return;
+      }
+      passkeyLoginBtn.disabled = true;
+      const originalHtml = passkeyLoginBtn.innerHTML;
+      passkeyLoginBtn.innerHTML = '<span class="passkey-key-icon" aria-hidden="true">⏳</span><span>正在识别设备…</span>';
+
+      try {
+        const resp = await fetch('/auth/passkey/login/options', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({ detail: '获取登录请求失败' }));
+          throw new Error(err.detail || '获取登录请求失败');
+        }
+        const options = await resp.json();
+
+        const requestOptions = PublicKeyCredential.parseRequestOptionsFromJSON
+          ? PublicKeyCredential.parseRequestOptionsFromJSON(options)
+          : {
+              ...options,
+              challenge: base64urlToBuffer(options.challenge),
+              allowCredentials: (options.allowCredentials || []).map((cred) => ({
+                ...cred,
+                id: base64urlToBuffer(cred.id),
+              })),
+            };
+
+        const assertion = await navigator.credentials.get({ publicKey: requestOptions });
+        if (!assertion) throw new Error('未能从设备获取通行密钥凭据');
+
+        let assertionData;
+        if (typeof assertion.toJSON === 'function') {
+          assertionData = assertion.toJSON();
+        } else {
+          assertionData = {
+            id: assertion.id,
+            rawId: bufferToBase64url(assertion.rawId),
+            type: assertion.type,
+            response: {
+              clientDataJSON: bufferToBase64url(assertion.response.clientDataJSON),
+              authenticatorData: bufferToBase64url(assertion.response.authenticatorData),
+              signature: bufferToBase64url(assertion.response.signature),
+              userHandle: assertion.response.userHandle ? bufferToBase64url(assertion.response.userHandle) : null,
+            },
+          };
+        }
+        assertionData.next = passkeyLoginBtn.dataset.next || '/';
+
+        passkeyLoginBtn.innerHTML = '<span class="passkey-key-icon" aria-hidden="true">🔓</span><span>验证成功，正在登录…</span>';
+        const verifyResp = await fetch('/auth/passkey/login/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(assertionData),
+        });
+        const verifyResult = await verifyResp.json().catch(() => ({ detail: '登录验证失败' }));
+        if (!verifyResp.ok) {
+          throw new Error(verifyResult.detail || '通行密钥验证失败');
+        }
+
+        window.location.href = verifyResult.redirect || '/';
+      } catch (err) {
+        if (err.name === 'NotAllowedError') {
+          // 用户手动关闭设备识别框或超时，不弹窗打扰
+        } else {
+          window.alert(`通行密钥登录失败：${err.message || err}`);
+        }
+        passkeyLoginBtn.disabled = false;
+        passkeyLoginBtn.innerHTML = originalHtml;
+      }
+    };
+
+    passkeyLoginBtn.addEventListener('click', doPasskeyLogin);
+  }
 })();

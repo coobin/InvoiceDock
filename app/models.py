@@ -205,6 +205,23 @@ class UserTitle(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class UserPasskey(Base):
+    """用户绑定的 WebAuthn / Passkey 通行密钥凭据。支持无用户名/无密码设备识别登录。"""
+
+    __tablename__ = "user_passkeys"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(120), default="通行密钥")
+    credential_id: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    public_key: Mapped[str] = mapped_column(Text)
+    sign_count: Mapped[int] = mapped_column(Integer, default=0)
+    aaguid: Mapped[str] = mapped_column(String(64), default="")
+    transports: Mapped[list[str]] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class OAuthState(Base):
     """服务端 OIDC state 存储。把登录临时状态放数据库而不是会话 cookie，
     避免浏览器跨站回跳时丢弃 cookie 导致 mismatching_state。"""

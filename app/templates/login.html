@@ -20,10 +20,23 @@
     <div class="login-card">
       <span class="ticket-label">工作台通行证</span>
       <h2>登录票舱</h2>
+
+      <div class="passkey-login-panel">
+        <button type="button" class="button wide passkey-login-button" id="btn-passkey-login" data-next="{{ next_path }}">
+          <span class="passkey-key-icon" aria-hidden="true">🔑</span>
+          <span>使用通行密钥 (Passkey) 登录</span>
+        </button>
+        <p class="passkey-login-tip">直接识别本设备 Touch ID / Face ID / 安全密钥，无需输入用户名与密码</p>
+      </div>
+
+      <div class="login-divider">
+        <span>或使用密码登录</span>
+      </div>
+
       <form method="post" action="/admin" class="stack-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
         <input type="hidden" name="next" value="{{ next_path }}">
-        <label>邮箱 / 用户名<input name="username" autocomplete="username" required autofocus placeholder="name@example.com"></label>
+        <label>邮箱 / 用户名<input name="username" autocomplete="username webauthn" required autofocus placeholder="name@example.com"></label>
         <label>密码<input type="password" name="password" autocomplete="current-password" required placeholder="输入登录密码"></label>
         <button class="button primary wide" type="submit">进入工作台 <span>→</span></button>
       </form>

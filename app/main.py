@@ -32,6 +32,8 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
+from webauthn import options_to_json
+from webauthn.helpers import bytes_to_base64url
 
 from app import __version__
 from app.config import get_settings
@@ -45,6 +47,7 @@ from app.models import (
     OAuthState,
     Project,
     User,
+    UserPasskey,
     UserTitle,
     utcnow,
 )
@@ -75,6 +78,14 @@ from app.services.notification_service import (
     notify_event_background,
     save_notification_settings,
     test_bark_notification,
+)
+from app.services.passkey_service import (
+    generate_auth_options,
+    generate_reg_options,
+    get_origins,
+    get_rp_id,
+    verify_auth_response,
+    verify_reg_response,
 )
 from app.services.quota_service import (
     get_tax_verify_daily_limit,
@@ -828,10 +839,11 @@ async def logout(request: Request, db: Session = Depends(get_db)):
 @app.get("/profile", response_class=HTMLResponse)
 def profile(request: Request, db: Session = Depends(get_db)):
     user = require_page_user(request, db)
+    passkeys = list(db.scalars(select(UserPasskey).where(UserPasskey.user_id == user.id).order_by(UserPasskey.created_at.desc())).all())
     return templates.TemplateResponse(
         request,
         "profile.html",
-        context(request, user, page="profile"),
+        context(request, user, page="profile", passkeys=passkeys),
     )
 
 
@@ -2378,3 +2390,136 @@ async def delete_expense(expense_id: str, request: Request, db: Session = Depend
     record_audit(db, request, user, "expense.delete", "expense_item", expense.id)
     flash(request, "待开票项已删除")
     return RedirectResponse("/expenses", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# Passkey 通行密钥（WebAuthn / FIDO2）
+# ---------------------------------------------------------------------------
+
+@app.post("/auth/passkey/register/options")
+async def passkey_register_options(request: Request, db: Session = Depends(get_db)):
+    user = require_page_user(request, db)
+    rp_id = get_rp_id(request)
+    existing_passkeys = list(db.scalars(select(UserPasskey).where(UserPasskey.user_id == user.id)).all())
+    options = generate_reg_options(user, rp_id, existing_passkeys)
+    request.session["passkey_reg_challenge"] = bytes_to_base64url(options.challenge)
+    return Response(options_to_json(options), media_type="application/json")
+
+
+@app.post("/auth/passkey/register/verify")
+async def passkey_register_verify(request: Request, db: Session = Depends(get_db)):
+    user = require_page_user(request, db)
+    expected_challenge = request.session.pop("passkey_reg_challenge", None)
+    if not expected_challenge:
+        raise HTTPException(status_code=400, detail="注册挑战已过期，请刷新重试")
+
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="无效的凭据数据") from None
+
+    rp_id = get_rp_id(request)
+    origins = get_origins(request)
+
+    try:
+        verification = verify_reg_response(data, expected_challenge, rp_id, origins)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"通行密钥验证失败：{exc}") from exc
+
+    credential_id = bytes_to_base64url(verification.credential_id)
+    public_key = bytes_to_base64url(verification.credential_public_key)
+    name = str(data.get("name", "")).strip() or "通行密钥 (此设备)"
+    transports = data.get("response", {}).get("transports", [])
+
+    passkey = UserPasskey(
+        user_id=user.id,
+        name=name,
+        credential_id=credential_id,
+        public_key=public_key,
+        sign_count=verification.sign_count,
+        aaguid=str(verification.aaguid),
+        transports=transports,
+    )
+    db.add(passkey)
+    db.commit()
+    record_audit(db, request, user, "passkey.register", "passkey", passkey.id, {"name": name})
+    return {"ok": True, "message": "通行密钥添加成功"}
+
+
+@app.post("/auth/passkey/login/options")
+async def passkey_login_options(request: Request):
+    rp_id = get_rp_id(request)
+    options = generate_auth_options(rp_id)
+    request.session["passkey_auth_challenge"] = bytes_to_base64url(options.challenge)
+    return Response(options_to_json(options), media_type="application/json")
+
+
+@app.post("/auth/passkey/login/verify")
+async def passkey_login_verify(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    expected_challenge = request.session.pop("passkey_auth_challenge", None)
+    if not expected_challenge:
+        raise HTTPException(status_code=400, detail="登录请求已过期，请刷新后重试")
+
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="无效的凭据数据") from None
+
+    raw_id = data.get("id")
+    if not raw_id:
+        raise HTTPException(status_code=400, detail="缺少通行密钥标识")
+
+    passkey = db.scalar(select(UserPasskey).where(UserPasskey.credential_id == raw_id))
+    if not passkey:
+        raise HTTPException(status_code=400, detail="未找到该设备对应的通行密钥，请先在账户安全页面绑定")
+
+    user = db.get(User, passkey.user_id)
+    if not user or not user.active:
+        raise HTTPException(status_code=403, detail="该账户已被停用或不存在")
+
+    rp_id = get_rp_id(request)
+    origins = get_origins(request)
+
+    try:
+        verification = verify_auth_response(data, expected_challenge, passkey, rp_id, origins)
+    except Exception as exc:
+        record_audit(db, request, None, "auth.passkey_login_failed", details={"reason": str(exc)})
+        raise HTTPException(status_code=400, detail=f"通行密钥认证失败：{exc}") from exc
+
+    # 更新凭据计数与最后使用时间
+    passkey.sign_count = verification.new_sign_count
+    passkey.last_used_at = utcnow()
+    start_user_session(request, user)
+    mark_login(user, db)
+    record_audit(db, request, user, "auth.passkey_login", "passkey", passkey.id)
+    background_tasks.add_task(
+        notify_event_background,
+        "login",
+        "InvoiceDock · 用户登录",
+        f"账号：{_notification_user_label(user)}\n方式：通行密钥 (Passkey)",
+    )
+    redirect_to = str(data.get("next") or request.query_params.get("next") or "/").strip()
+    if not redirect_to.startswith("/") or redirect_to.startswith("//"):
+        redirect_to = "/"
+    return {"ok": True, "redirect": redirect_to}
+
+
+@app.post("/auth/passkey/{passkey_id}/delete")
+async def passkey_delete(passkey_id: str, request: Request, db: Session = Depends(get_db)):
+    user = require_page_user(request, db)
+    form = await request.form()
+    validate_csrf(request, str(form.get("csrf_token", "")))
+    passkey = db.get(UserPasskey, passkey_id)
+    if not passkey or (user.role != "admin" and passkey.user_id != user.id):
+        raise HTTPException(status_code=404, detail="通行密钥不存在")
+
+    db.delete(passkey)
+    db.commit()
+    record_audit(db, request, user, "passkey.delete", "passkey", passkey_id, {"name": passkey.name})
+    flash(request, f"已移除通行密钥「{passkey.name}」")
+    return RedirectResponse("/profile", status_code=303)
+
