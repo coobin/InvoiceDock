@@ -2400,6 +2400,7 @@ async def delete_expense(expense_id: str, request: Request, db: Session = Depend
 async def passkey_register_options(request: Request, db: Session = Depends(get_db)):
     user = require_page_user(request, db)
     rp_id = get_rp_id(request)
+    logger.info("passkey_register_options: rp_id=%s host=%s x-forwarded-host=%s origin=%s", rp_id, request.headers.get("host"), request.headers.get("x-forwarded-host"), request.headers.get("origin"))
     existing_passkeys = list(db.scalars(select(UserPasskey).where(UserPasskey.user_id == user.id)).all())
     options = generate_reg_options(user, rp_id, existing_passkeys)
     request.session["passkey_reg_challenge"] = bytes_to_base64url(options.challenge)
@@ -2420,6 +2421,7 @@ async def passkey_register_verify(request: Request, db: Session = Depends(get_db
 
     rp_id = get_rp_id(request)
     origins = get_origins(request)
+    logger.info("passkey_register_verify: rp_id=%s origins=%s data_id=%s", rp_id, origins, data.get("id"))
 
     try:
         verification = verify_reg_response(data, expected_challenge, rp_id, origins)
@@ -2449,6 +2451,7 @@ async def passkey_register_verify(request: Request, db: Session = Depends(get_db
 @app.post("/auth/passkey/login/options")
 async def passkey_login_options(request: Request):
     rp_id = get_rp_id(request)
+    logger.info("passkey_login_options: rp_id=%s host=%s x-forwarded-host=%s origin=%s", rp_id, request.headers.get("host"), request.headers.get("x-forwarded-host"), request.headers.get("origin"))
     options = generate_auth_options(rp_id)
     request.session["passkey_auth_challenge"] = bytes_to_base64url(options.challenge)
     return Response(options_to_json(options), media_type="application/json")

@@ -274,6 +274,23 @@
   }
 
   // --- 通行密钥（WebAuthn / Passkey）支持 ---
+  const validateWebAuthnContext = () => {
+    if (!window.PublicKeyCredential) {
+      window.alert('当前浏览器或运行环境不支持通行密钥 (Passkey / WebAuthn)。\n请使用支持 WebAuthn 的现代浏览器（如 Chrome、Safari、Edge）。');
+      return false;
+    }
+    if (!window.isSecureContext) {
+      window.alert('【浏览器安全策略限制】\n\n通行密钥由操作系统底层安全硬件保护，W3C 规范要求必须在安全连接 (HTTPS) 或本机 (localhost) 下运行。\n\n当前访问为非安全 HTTP（' + window.location.origin + '），浏览器内核已禁用生物识别与通行密钥。\n\n请使用 HTTPS 域名访问系统后再添加通行密钥。');
+      return false;
+    }
+    const isIp = /^(\d{1,3}\.){3}\d{1,3}$/.test(window.location.hostname);
+    if (isIp && window.location.hostname !== '127.0.0.1') {
+      window.alert('【W3C 规范限制】\n\n通行密钥标准规定凭据作用域 (RP ID) 必须绑定至有效域名，禁止将裸 IP 地址（' + window.location.hostname + '）作为通行密钥凭据作用域。\n\n请通过系统配置的域名（如 https://ind.chencytech.com）访问后再添加通行密钥。');
+      return false;
+    }
+    return true;
+  };
+
   const base64urlToBuffer = (base64url) => {
     const padding = '='.repeat((4 - (base64url.length % 4)) % 4);
     const base64 = (base64url + padding).replace(/-/g, '+').replace(/_/g, '/');
@@ -298,10 +315,8 @@
   const addPasskeyBtn = one('#btn-add-passkey');
   if (addPasskeyBtn) {
     addPasskeyBtn.addEventListener('click', async () => {
-      if (!window.PublicKeyCredential) {
-        window.alert('当前浏览器或运行环境不支持通行密钥 (Passkey / WebAuthn)。请使用现代浏览器（如 Chrome、Safari、Edge）并确保在 HTTPS 或 localhost 环境下访问。');
-        return;
-      }
+      if (!validateWebAuthnContext()) return;
+
       const deviceName = window.prompt('请输入此通行密钥的备注名称（例如：MacBook 指纹、工作电脑、iPhone）：', '我的设备通行密钥');
       if (deviceName === null) return;
       const finalName = deviceName.trim() || '我的设备通行密钥';
@@ -369,10 +384,16 @@
 
         window.location.reload();
       } catch (err) {
+        console.error('Passkey registration error:', err);
+        const errMsg = err.message || String(err);
         if (err.name === 'NotAllowedError') {
-          window.alert('已取消通行密钥创建或操作超时。');
+          if (!window.isSecureContext) {
+            window.alert('浏览器安全策略拦截：当前环境不是 HTTPS 安全连接，无法调用通行密钥。请使用 HTTPS 域名访问。');
+          } else {
+            window.alert(`操作未完成 (${err.name})：${errMsg || '用户已取消或设备识别超时'}`);
+          }
         } else {
-          window.alert(`添加通行密钥失败：${err.message || err}`);
+          window.alert(`添加通行密钥失败 (${err.name || 'Error'})：${errMsg}`);
         }
       } finally {
         addPasskeyBtn.disabled = false;
@@ -385,10 +406,8 @@
   const passkeyLoginBtn = one('#btn-passkey-login');
   if (passkeyLoginBtn) {
     const doPasskeyLogin = async () => {
-      if (!window.PublicKeyCredential) {
-        window.alert('当前浏览器或运行环境不支持通行密钥 (Passkey / WebAuthn)。请使用支持 WebAuthn 的现代浏览器并在安全连接 (HTTPS/localhost) 下使用。');
-        return;
-      }
+      if (!validateWebAuthnContext()) return;
+
       passkeyLoginBtn.disabled = true;
       const originalHtml = passkeyLoginBtn.innerHTML;
       passkeyLoginBtn.innerHTML = '<span class="passkey-key-icon" aria-hidden="true">⏳</span><span>正在识别设备…</span>';
@@ -449,10 +468,12 @@
 
         window.location.href = verifyResult.redirect || '/';
       } catch (err) {
+        console.error('Passkey login error:', err);
+        const errMsg = err.message || String(err);
         if (err.name === 'NotAllowedError') {
           // 用户手动关闭设备识别框或超时，不弹窗打扰
         } else {
-          window.alert(`通行密钥登录失败：${err.message || err}`);
+          window.alert(`通行密钥登录失败 (${err.name || 'Error'})：${errMsg}`);
         }
         passkeyLoginBtn.disabled = false;
         passkeyLoginBtn.innerHTML = originalHtml;
