@@ -169,6 +169,89 @@ def throttle_reset(key: str) -> None:
         _throttle.pop(key, None)
 
 
+# ---------------------------------------------------------------------------
+# 智能防撞库验证码（连续失败达到阈值时触发）
+# ---------------------------------------------------------------------------
+
+CAPTCHA_FAILURE_THRESHOLD = 2
+_FAIL_MAX_BUCKETS = 10_000
+_FAIL_WINDOW = 900.0  # 15 分钟窗口
+
+
+@dataclass
+class _FailCountBucket:
+    count: int
+    expires_at: float
+
+
+_fail_counts: OrderedDict[str, _FailCountBucket] = OrderedDict()
+_fail_counts_lock = threading.Lock()
+
+
+def record_login_failure(ip: str, username: str = "") -> int:
+    """记录一次登录失败，返回当前累计失败次数。"""
+    now = monotonic()
+    with _fail_counts_lock:
+        # 清理超出上限的条目
+        if len(_fail_counts) >= _FAIL_MAX_BUCKETS:
+            _fail_counts.popitem(last=False)
+
+        key_ip = f"fail:ip:{ip}"
+        b_ip = _fail_counts.get(key_ip)
+        if b_ip and b_ip.expires_at > now:
+            b_ip.count += 1
+            b_ip.expires_at = now + _FAIL_WINDOW
+        else:
+            b_ip = _FailCountBucket(count=1, expires_at=now + _FAIL_WINDOW)
+            _fail_counts[key_ip] = b_ip
+        _fail_counts.move_to_end(key_ip)
+
+        if username:
+            key_user = f"fail:user:{username.strip().lower()}"
+            b_user = _fail_counts.get(key_user)
+            if b_user and b_user.expires_at > now:
+                b_user.count += 1
+                b_user.expires_at = now + _FAIL_WINDOW
+            else:
+                b_user = _FailCountBucket(count=1, expires_at=now + _FAIL_WINDOW)
+                _fail_counts[key_user] = b_user
+            _fail_counts.move_to_end(key_user)
+
+        return b_ip.count
+
+
+def get_login_failures(ip: str, username: str = "") -> int:
+    """获取当前 IP 或账号在有效期内的累计失败次数。"""
+    now = monotonic()
+    with _fail_counts_lock:
+        key_ip = f"fail:ip:{ip}"
+        b_ip = _fail_counts.get(key_ip)
+        ip_cnt = b_ip.count if b_ip and b_ip.expires_at > now else 0
+
+        user_cnt = 0
+        if username:
+            key_user = f"fail:user:{username.strip().lower()}"
+            b_user = _fail_counts.get(key_user)
+            user_cnt = b_user.count if b_user and b_user.expires_at > now else 0
+
+        return max(ip_cnt, user_cnt)
+
+
+def reset_login_failures(ip: str, username: str = "") -> None:
+    """登录成功后清除失败计数。"""
+    with _fail_counts_lock:
+        _fail_counts.pop(f"fail:ip:{ip}", None)
+        if username:
+            _fail_counts.pop(f"fail:user:{username.strip().lower()}", None)
+
+
+def is_captcha_required(request: Request, ip: str, username: str = "") -> bool:
+    """判断当前请求是否需要输入图形验证码。"""
+    if request.session.get("require_captcha"):
+        return True
+    return get_login_failures(ip, username) >= CAPTCHA_FAILURE_THRESHOLD
+
+
 def password_policy_error(password: str, minimum_length: int = 12) -> str | None:
     """Return a user-facing password policy error, or ``None`` when valid."""
     if len(password) < max(12, minimum_length):

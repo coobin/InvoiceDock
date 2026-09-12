@@ -38,6 +38,16 @@
         <input type="hidden" name="next" value="{{ next_path }}">
         <label>邮箱 / 用户名<input name="username" autocomplete="username webauthn" required autofocus placeholder="name@example.com"></label>
         <label>密码<input type="password" name="password" autocomplete="current-password" required placeholder="输入登录密码"></label>
+        {% if require_captcha %}
+        <div class="captcha-box">
+          <label>安全验证码
+            <div class="captcha-row">
+              <input name="captcha" autocomplete="off" required placeholder="输入验证码" maxlength="6" class="captcha-input">
+              <img src="/auth/captcha" alt="验证码" class="captcha-img" id="captcha-img" title="看不清？点击换一张" onclick="this.src='/auth/captcha?t='+Date.now()">
+            </div>
+          </label>
+        </div>
+        {% endif %}
         <button class="button primary wide" type="submit">进入工作台 <span>→</span></button>
       </form>
       {% if registration_enabled %}

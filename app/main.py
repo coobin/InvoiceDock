@@ -52,22 +52,32 @@ from app.models import (
     utcnow,
 )
 from app.security import (
+    CAPTCHA_FAILURE_THRESHOLD,
     bootstrap_admin,
     client_ip,
     csrf_token,
     current_user,
     encrypt_secret,
     hash_password,
+    is_captcha_required,
     is_reserved_username,
     mark_login,
     password_policy_error,
     record_audit,
+    record_login_failure,
+    reset_login_failures,
     rotate_user_sessions,
     start_user_session,
     throttle_limit,
     throttle_reset,
     validate_csrf,
     verify_password,
+)
+from app.services.captcha_service import (
+    generate_captcha_svg,
+    generate_captcha_text,
+    store_captcha,
+    verify_captcha,
 )
 from app.services.export_service import make_invoice_workbook, make_preview, make_print_pdf
 from app.services.ingestion import extract_zip_candidates, ingest_bytes
@@ -441,10 +451,24 @@ def api_status(request: Request, db: Session = Depends(get_db)):
     }
 
 
+@app.get("/auth/captcha")
+async def auth_captcha(request: Request):
+    text = generate_captcha_text(4)
+    store_captcha(request, text)
+    svg = generate_captcha_svg(text)
+    return Response(
+        content=svg,
+        media_type="image/svg+xml",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+    )
+
+
 @app.get("/admin", response_class=HTMLResponse)
 def login_page(request: Request, next: str = "/", db: Session = Depends(get_db)):  # noqa: A002
     if current_user(request, db):
         return RedirectResponse("/", status_code=303)
+    ip = client_ip(request)
+    need_captcha = is_captcha_required(request, ip)
     return templates.TemplateResponse(
         request,
         "login.html",
@@ -453,6 +477,7 @@ def login_page(request: Request, next: str = "/", db: Session = Depends(get_db))
             next_path=next if next.startswith("/") and not next.startswith("//") else "/",
             oidc_enabled=oidc_enabled(db),
             registration_enabled=settings.registration_enabled,
+            require_captcha=need_captcha,
         ),
     )
 
@@ -486,6 +511,24 @@ async def login_submit(
         )
         flash(request, "尝试次数过多，请 15 分钟后再试", "error")
         return RedirectResponse("/admin", status_code=303)
+
+    # 智能防撞库模式：连续失败达到阈值时必须先验证图形验证码
+    need_captcha = is_captcha_required(request, ip, username)
+    if need_captcha:
+        submitted_captcha = str(form.get("captcha", "")).strip()
+        if not submitted_captcha or not verify_captcha(request, submitted_captcha):
+            record_login_failure(ip, username)
+            request.session["require_captcha"] = True
+            record_audit(
+                db,
+                request,
+                None,
+                "auth.login_failed",
+                details={"reason": "invalid_captcha"},
+            )
+            flash(request, "验证码不正确或已过期，请重新输入", "error")
+            return RedirectResponse("/admin", status_code=303)
+
     password = str(form.get("password", ""))
     user = db.scalar(select(User).where(func.lower(User.username) == username))
     password_valid = (
@@ -496,6 +539,12 @@ async def login_submit(
         and verify_password(password, user.password_hash)
     )
     if not password_valid:
+        fail_count = record_login_failure(ip, username)
+        if fail_count >= CAPTCHA_FAILURE_THRESHOLD:
+            request.session["require_captcha"] = True
+            flash(request, "用户名或密码不正确，连续失败已开启安全验证码", "error")
+        else:
+            flash(request, "用户名或密码不正确", "error")
         record_audit(
             db,
             request,
@@ -505,10 +554,16 @@ async def login_submit(
             str(user.id) if user else "",
             {"reason": "invalid_credentials"},
         )
-        flash(request, "用户名或密码不正确", "error")
         return RedirectResponse("/admin", status_code=303)
+
+    # 登录成功，重置失败计数与验证码标记
     throttle_reset(f"login-ip:{ip}")
     throttle_reset(f"login-account:{username}")
+    reset_login_failures(ip, username)
+    request.session.pop("require_captcha", None)
+    request.session.pop("captcha_code", None)
+    request.session.pop("captcha_time", None)
+
     start_user_session(request, user)
     mark_login(user, db)
     record_audit(db, request, user, "auth.login")

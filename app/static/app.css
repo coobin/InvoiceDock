@@ -619,3 +619,11 @@ label input, label select, label textarea { display: block; margin-top: 5px; col
 .progress-label strong { color: var(--ink); }
 .project-card-foot { display: flex; gap: 8px; margin-top: auto; padding-top: 14px; border-top: 1px dashed var(--rule); align-items: center; flex-wrap: wrap; }
 
+/* 登录安全验证码 */
+.captcha-box { margin-bottom: 12px; }
+.captcha-row { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
+.captcha-row .captcha-input { flex: 1; min-width: 0; font-family: var(--font-mono); font-size: 15px; letter-spacing: 2px; text-transform: uppercase; }
+.captcha-img { width: 120px; height: 40px; border-radius: 6px; border: 1px solid var(--rule); flex-shrink: 0; cursor: pointer; transition: opacity .15s ease, transform .15s ease; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+.captcha-img:hover { opacity: .85; transform: scale(1.02); }
+
+
