@@ -34,7 +34,7 @@
   </section>
   {% else %}
   <section class="integration-card user-tax-card">
-    <div class="integration-head"><div class="integration-number">税</div><div><span class="eyebrow">TAX VERIFICATION</span><h2>税务发票云验票</h2><p>使用管理员统一配置的税务发票云；关闭后，你的发票仅走 OCR + LLM 或人工复核。</p></div><label class="switch"><input type="checkbox" name="tax_verify_enabled" {{ 'checked' if user_tax_verify_enabled else '' }}><span></span><b>{{ '已打开' if user_tax_verify_enabled else '已关闭' }}</b></label></div>
+    <div class="integration-head"><div class="integration-number">税</div><div><span class="eyebrow">TAX VERIFICATION</span><h2>税务发票云验票</h2><p>使用系统预置的税务发票云；关闭后，你的发票仅走 OCR + LLM 或人工复核。</p></div><label class="switch"><input type="checkbox" name="tax_verify_enabled" {{ 'checked' if user_tax_verify_enabled else '' }}><span></span><b>{{ '已打开' if user_tax_verify_enabled else '已关闭' }}</b></label></div>
     <div class="privacy-band"><b>每日额度</b><p>税务验票受管理员设置的每用户每日上限约束；同日缓存命中不会消耗额度。</p></div>
   </section>
   {% endif %}
