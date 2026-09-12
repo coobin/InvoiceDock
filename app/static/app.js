@@ -285,10 +285,20 @@
     }
     const isIp = /^(\d{1,3}\.){3}\d{1,3}$/.test(window.location.hostname);
     if (isIp && window.location.hostname !== '127.0.0.1') {
-      window.alert('【W3C 规范限制】\n\n通行密钥标准规定凭据作用域 (RP ID) 必须绑定至有效域名，禁止将裸 IP 地址（' + window.location.hostname + '）作为通行密钥凭据作用域。\n\n请通过系统配置的域名（如 https://ind.chencytech.com）访问后再添加通行密钥。');
+      window.alert('【W3C 规范限制】\n\n通行密钥标准规定凭据作用域 (RP ID) 必须绑定至有效域名，禁止将裸 IP 地址（' + window.location.hostname + '）作为通行密钥凭据作用域。\n\n请通过系统配置的 HTTPS 域名（如 ' + (window.location.origin || 'https://fapiao.okkay.tech') + '）访问后再添加通行密钥。');
       return false;
     }
     return true;
+  };
+
+  const getDeviceDefaultName = () => {
+    const ua = navigator.userAgent || '';
+    if (/iPhone/i.test(ua)) return 'iPhone 通行密钥';
+    if (/iPad/i.test(ua)) return 'iPad 通行密钥';
+    if (/Macintosh|Mac OS X/i.test(ua)) return 'Mac 设备通行密钥';
+    if (/Windows/i.test(ua)) return 'Windows 设备通行密钥';
+    if (/Android/i.test(ua)) return 'Android 设备通行密钥';
+    return '此设备通行密钥';
   };
 
   const base64urlToBuffer = (base64url) => {
@@ -317,13 +327,9 @@
     addPasskeyBtn.addEventListener('click', async () => {
       if (!validateWebAuthnContext()) return;
 
-      const deviceName = window.prompt('请输入此通行密钥的备注名称（例如：MacBook 指纹、工作电脑、iPhone）：', '我的设备通行密钥');
-      if (deviceName === null) return;
-      const finalName = deviceName.trim() || '我的设备通行密钥';
-
       addPasskeyBtn.disabled = true;
       const originalText = addPasskeyBtn.textContent;
-      addPasskeyBtn.textContent = '正在发起注册…';
+      addPasskeyBtn.textContent = '正在识别设备…';
 
       try {
         const resp = await fetch('/auth/passkey/register/options', {
@@ -351,6 +357,11 @@
               })),
             };
 
+        // 清理空 excludeCredentials，避免部分旧版本浏览器无法正确匹配认证器
+        if (Array.isArray(creationOptions.excludeCredentials) && creationOptions.excludeCredentials.length === 0) {
+          delete creationOptions.excludeCredentials;
+        }
+
         const credential = await navigator.credentials.create({ publicKey: creationOptions });
         if (!credential) throw new Error('设备未生成通行密钥凭据');
 
@@ -369,7 +380,7 @@
             },
           };
         }
-        credData.name = finalName;
+        credData.name = getDeviceDefaultName();
 
         addPasskeyBtn.textContent = '正在保存凭据…';
         const verifyResp = await fetch('/auth/passkey/register/verify', {
@@ -387,11 +398,8 @@
         console.error('Passkey registration error:', err);
         const errMsg = err.message || String(err);
         if (err.name === 'NotAllowedError') {
-          if (!window.isSecureContext) {
-            window.alert('浏览器安全策略拦截：当前环境不是 HTTPS 安全连接，无法调用通行密钥。请使用 HTTPS 域名访问。');
-          } else {
-            window.alert(`操作未完成 (${err.name})：${errMsg || '用户已取消或设备识别超时'}`);
-          }
+          // 用户取消或未授权验证
+          window.alert('已取消通行密钥创建或操作超时。');
         } else {
           window.alert(`添加通行密钥失败 (${err.name || 'Error'})：${errMsg}`);
         }
@@ -433,6 +441,11 @@
                 id: base64urlToBuffer(cred.id),
               })),
             };
+
+        // 免用户名登录（Discoverable Credentials）：若 allowCredentials 为空，移除该属性以允许设备自动匹配凭据
+        if (Array.isArray(requestOptions.allowCredentials) && requestOptions.allowCredentials.length === 0) {
+          delete requestOptions.allowCredentials;
+        }
 
         const assertion = await navigator.credentials.get({ publicKey: requestOptions });
         if (!assertion) throw new Error('未能从设备获取通行密钥凭据');

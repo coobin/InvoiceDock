@@ -46,12 +46,15 @@ def get_origins(request: Request) -> list[str]:
         parsed = urlparse(request.headers["referer"])
         origins.add(f"{parsed.scheme}://{parsed.netloc}".rstrip("/"))
     scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
-    host = (
+    raw_host = (
         request.headers.get("x-forwarded-host")
         or request.headers.get("host")
         or f"{request.url.hostname}:{request.url.port}"
     )
-    origins.add(f"{scheme}://{host}".rstrip("/"))
+    origins.add(f"{scheme}://{raw_host}".rstrip("/"))
+    clean_host = raw_host.split(":")[0].strip()
+    if clean_host:
+        origins.add(f"https://{clean_host}")
     base = get_settings().app_base_url.rstrip("/")
     if base:
         origins.add(base)
@@ -65,8 +68,8 @@ def generate_reg_options(
 ) -> PublicKeyCredentialCreationOptions:
     """生成通行密钥（Passkey）注册选项。
 
-    强制开启 resident_key=REQUIRED，使生成的凭据为“可发现凭据（Resident Key）”，
-    从而在后续登录时设备能够自动识别用户，实现免输用户名/免输密码。
+    resident_key 设为 PREFERRED，使现代操作系统（Mac Touch ID、iOS Face ID、Windows Hello）
+    自动创建可发现凭据（Resident Key / Passkey），同时避免不支持强制 resident_key 的设备直接报错。
     """
     exclude_credentials = [
         PublicKeyCredentialDescriptor(id=base64url_to_bytes(p.credential_id))
@@ -83,7 +86,7 @@ def generate_reg_options(
             resident_key=ResidentKeyRequirement.REQUIRED,
             user_verification=UserVerificationRequirement.PREFERRED,
         ),
-        exclude_credentials=exclude_credentials,
+        exclude_credentials=exclude_credentials or None,
     )
 
 
