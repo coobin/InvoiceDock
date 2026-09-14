@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     github_client_secret: str = ""
     google_client_id: str = ""
     google_client_secret: str = ""
+    oauth_proxy: str = ""
 
     # 注册邀请码机制：开启后注册必须提供有效邀请码
     registration_invite_required: bool = False

@@ -403,3 +403,67 @@ async def test_registration_with_invite_code(db_session, monkeypatch):
     assert invite.status == "depleted"
 
 
+@pytest.mark.asyncio
+async def test_google_login_redirect(monkeypatch, db_session):
+    from unittest.mock import AsyncMock
+    from starlette.requests import Request
+    from starlette.responses import RedirectResponse
+    from app.main import SessionLocal, google_login, oauth
+
+    monkeypatch.setattr(main.settings, "google_client_id", "google-test-id")
+    monkeypatch.setattr(main.settings, "google_client_secret", "google-test-secret")
+    monkeypatch.setattr(main, "SessionLocal", lambda: db_session)
+
+    fake_google = AsyncMock()
+    fake_google.authorize_redirect = AsyncMock(
+        return_value=RedirectResponse("https://accounts.google.com/o/oauth2/v2/auth?state=fake_state_123", status_code=302)
+    )
+    monkeypatch.setattr(oauth, "google", fake_google)
+
+    req = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/auth/google/login",
+            "headers": [(b"host", b"testserver")],
+            "query_string": b"next=/expenses",
+        }
+    )
+    resp = await google_login(req)
+    assert resp.status_code == 302
+    assert "accounts.google.com" in resp.headers["location"]
+
+
+@pytest.mark.asyncio
+async def test_google_callback_network_error_handled(monkeypatch, db_session):
+    from unittest.mock import AsyncMock
+    from starlette.requests import Request
+    from fastapi import BackgroundTasks
+    import httpx
+    from app.main import google_callback, oauth
+
+    monkeypatch.setattr(main.settings, "google_client_id", "google-test-id")
+    monkeypatch.setattr(main.settings, "google_client_secret", "google-test-secret")
+
+    fake_google = AsyncMock()
+    fake_google.authorize_access_token = AsyncMock(side_effect=httpx.ConnectTimeout("Connection timed out"))
+    monkeypatch.setattr(oauth, "google", fake_google)
+
+    req = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/auth/google/callback",
+            "headers": [(b"host", b"testserver")],
+            "query_string": b"state=abc&code=123",
+            "session": {},
+        }
+    )
+    bg = BackgroundTasks()
+    resp = await google_callback(req, bg, db_session)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/admin"
+    assert req.session.get("flash", {}).get("kind") == "error"
+    assert "网络连接超时" in req.session.get("flash", {}).get("message", "")
+
+

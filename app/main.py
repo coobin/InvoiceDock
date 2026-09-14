@@ -140,24 +140,36 @@ MAX_EXPORT_BYTES = 512 * 1024 * 1024
 scheduler = BackgroundScheduler(timezone=settings.tz)
 oauth = OAuth()
 if settings.oidc_enabled and settings.oidc_issuer and settings.oidc_client_id:
+    oidc_kwargs: dict[str, Any] = {"scope": settings.oidc_scopes}
+    if settings.oauth_proxy:
+        oidc_kwargs["proxy"] = settings.oauth_proxy
     oauth.register(
         name="oidc",
         client_id=settings.oidc_client_id,
         client_secret=settings.oidc_client_secret,
         server_metadata_url=f"{settings.oidc_issuer}/.well-known/openid-configuration",
-        client_kwargs={"scope": settings.oidc_scopes},
+        client_kwargs=oidc_kwargs,
     )
 
 if settings.google_enabled:
+    google_kwargs: dict[str, Any] = {"scope": "email profile"}
+    if settings.oauth_proxy:
+        google_kwargs["proxy"] = settings.oauth_proxy
     oauth.register(
         name="google",
         client_id=settings.google_client_id,
         client_secret=settings.google_client_secret,
-        server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
-        client_kwargs={"scope": "openid email profile"},
+        api_base_url="https://www.googleapis.com/oauth2/v3/",
+        authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
+        access_token_url="https://oauth2.googleapis.com/token",
+        userinfo_endpoint="https://www.googleapis.com/oauth2/v3/userinfo",
+        client_kwargs=google_kwargs,
     )
 
 if settings.github_enabled:
+    github_kwargs: dict[str, Any] = {"scope": "read:user user:email"}
+    if settings.oauth_proxy:
+        github_kwargs["proxy"] = settings.oauth_proxy
     oauth.register(
         name="github",
         client_id=settings.github_client_id,
@@ -165,7 +177,7 @@ if settings.github_enabled:
         api_base_url="https://api.github.com/",
         authorize_url="https://github.com/login/oauth/authorize",
         access_token_url="https://github.com/login/oauth/access_token",
-        client_kwargs={"scope": "read:user user:email"},
+        client_kwargs=github_kwargs,
     )
 
 
@@ -1033,7 +1045,12 @@ async def google_login(request: Request):
     next_path = str(request.query_params.get("next", "/"))
     if not next_path.startswith("/") or next_path.startswith("//"):
         next_path = "/"
-    response = await oauth.google.authorize_redirect(request, redirect_uri)
+    try:
+        response = await oauth.google.authorize_redirect(request, redirect_uri)
+    except Exception as exc:
+        logger.exception("Google OAuth login error: %s", exc)
+        flash(request, "发起 Google 登录失败，请稍后重试", "error")
+        return RedirectResponse("/admin", status_code=303)
     match = re.search(r"state=([^&]+)", response.headers.get("location", ""))
     if match:
         with SessionLocal() as db:
@@ -1064,8 +1081,8 @@ async def google_callback(
         token = await oauth.google.authorize_access_token(request)
         userinfo = token.get("userinfo")
         if not userinfo:
-            resp = await oauth.google.get("https://openidconnect.googleapis.com/v1/userinfo", token=token)
-            userinfo = resp.json()
+            resp = await oauth.google.get("userinfo", token=token)
+            userinfo = resp.json() if resp.is_success else {}
     except OAuthError as exc:
         record_audit(
             db,
@@ -1076,8 +1093,30 @@ async def google_callback(
         )
         flash(request, f"Google 登录失败：{exc.error}", "error")
         return RedirectResponse("/admin", status_code=303)
+    except Exception as exc:
+        logger.exception("Google OAuth callback error: %s", exc)
+        record_audit(
+            db,
+            request,
+            None,
+            "auth.google_login_failed",
+            details={"reason": "network_error"},
+        )
+        flash(request, "Google 登录失败：网络连接超时或 Google 服务不可达", "error")
+        return RedirectResponse("/admin", status_code=303)
 
     subject_id = str(userinfo.get("sub") or "")
+    if not subject_id:
+        record_audit(
+            db,
+            request,
+            None,
+            "auth.google_login_failed",
+            details={"reason": "missing_subject_id"},
+        )
+        flash(request, "Google 登录失败：未能获取有效用户信息", "error")
+        return RedirectResponse("/admin", status_code=303)
+
     email = str(userinfo.get("email") or "")
     email_verified = userinfo.get("email_verified") is True or str(userinfo.get("email_verified")).lower() == "true"
     name = str(userinfo.get("name") or userinfo.get("given_name") or "")
@@ -1121,6 +1160,7 @@ async def google_callback(
         "InvoiceDock · 用户登录",
         f"账号：{_notification_user_label(user)}\n方式：Google",
     )
+    flash(request, f"欢迎回来，{user.display_name or user.username}！", "success")
     return RedirectResponse(next_path, status_code=303)
 
 
@@ -1132,7 +1172,12 @@ async def github_login(request: Request):
     next_path = str(request.query_params.get("next", "/"))
     if not next_path.startswith("/") or next_path.startswith("//"):
         next_path = "/"
-    response = await oauth.github.authorize_redirect(request, redirect_uri)
+    try:
+        response = await oauth.github.authorize_redirect(request, redirect_uri)
+    except Exception as exc:
+        logger.exception("GitHub OAuth login error: %s", exc)
+        flash(request, "发起 GitHub 登录失败，请稍后重试", "error")
+        return RedirectResponse("/admin", status_code=303)
     match = re.search(r"state=([^&]+)", response.headers.get("location", ""))
     if match:
         with SessionLocal() as db:

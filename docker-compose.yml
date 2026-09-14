@@ -18,6 +18,10 @@ services:
       # supply Forwarded/X-Forwarded-* headers. Never use "*" here.
       FORWARDED_ALLOW_IPS: "${FORWARDED_ALLOW_IPS:-127.0.0.1}"
       TRUSTED_PROXY_IPS: "${TRUSTED_PROXY_IPS:-127.0.0.1,::1,172.16.0.0/12}"
+      HTTP_PROXY: "${HTTP_PROXY:-}"
+      HTTPS_PROXY: "${HTTPS_PROXY:-}"
+      NO_PROXY: "${NO_PROXY:-127.0.0.1,localhost}"
+      OAUTH_PROXY: "${OAUTH_PROXY:-}"
     ports:
       - "${APP_BIND_IP:-127.0.0.1}:${APP_PORT:-8765}:8000"
     volumes:
