@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     # X-Forwarded-For. Keep empty when the application is exposed directly.
     trusted_proxy_ips: str = ""
 
-    admin_username: str = "kay"
+    admin_username: str = "admin"
     admin_password: str = "change-me-now"
     admin_email: str = "admin@example.com"
 

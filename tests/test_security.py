@@ -48,12 +48,12 @@ def test_reserved_username_blocks_email_local_part_and_aliases(monkeypatch):
     monkeypatch.setattr(
         security,
         "get_settings",
-        lambda: SimpleNamespace(admin_username="kay", additional_reserved_usernames=set()),
+        lambda: SimpleNamespace(admin_username="admin", additional_reserved_usernames=set()),
     )
     assert is_reserved_username("admin@example.com") is True
     assert is_reserved_username("Admin+test@example.com") is True
     assert is_reserved_username("a.d_m-i-n@example.com") is True
-    assert is_reserved_username("kay@example.com") is True
+    assert is_reserved_username("root@example.com") is True
     assert is_reserved_username("normal-user@example.com") is False
 
 
@@ -61,7 +61,7 @@ def test_reserved_username_blocks_sensitive_display_names(monkeypatch):
     monkeypatch.setattr(
         security,
         "get_settings",
-        lambda: SimpleNamespace(admin_username="kay", additional_reserved_usernames=set()),
+        lambda: SimpleNamespace(admin_username="admin", additional_reserved_usernames=set()),
     )
     assert is_reserved_username("系统 管理员") is True
     assert is_reserved_username("官方") is True
@@ -73,7 +73,7 @@ def test_environment_can_add_reserved_usernames(monkeypatch):
         security,
         "get_settings",
         lambda: SimpleNamespace(
-            admin_username="kay",
+            admin_username="admin",
             additional_reserved_usernames={"finance", "财务"},
         ),
     )

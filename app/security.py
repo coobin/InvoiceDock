@@ -50,7 +50,6 @@ DEFAULT_RESERVED_USERNAMES = frozenset(
         "helpdesk",
         "invoice",
         "invoicedock",
-        "kay",
         "moderator",
         "no-reply",
         "noreply",

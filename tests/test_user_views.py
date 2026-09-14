@@ -45,7 +45,7 @@ def test_member_dashboard_only_shows_own_job_logs(tmp_path):
     with factory() as db:
         first = User(username="first", email="first@example.com")
         second = User(username="second", email="second@example.com")
-        admin = User(username="kay", email="admin@example.com", role="admin")
+        admin = User(username="admin", email="admin@example.com", role="admin")
         db.add_all([first, second, admin])
         db.flush()
         db.add_all(
@@ -70,7 +70,7 @@ def test_member_integrations_only_show_tax_switch_and_llm(tmp_path):
     factory = _factory(tmp_path)
     with factory() as db:
         member = User(username="member", email="member@example.com")
-        admin = User(username="kay", email="admin@example.com", role="admin")
+        admin = User(username="admin", email="admin@example.com", role="admin")
         db.add_all([member, admin])
         db.commit()
 

@@ -285,7 +285,7 @@
     }
     const isIp = /^(\d{1,3}\.){3}\d{1,3}$/.test(window.location.hostname);
     if (isIp && window.location.hostname !== '127.0.0.1') {
-      window.alert('【W3C 规范限制】\n\n通行密钥标准规定凭据作用域 (RP ID) 必须绑定至有效域名，禁止将裸 IP 地址（' + window.location.hostname + '）作为通行密钥凭据作用域。\n\n请通过系统配置的 HTTPS 域名（如 ' + (window.location.origin || 'https://fapiao.okkay.tech') + '）访问后再添加通行密钥。');
+      window.alert('【W3C 规范限制】\n\n通行密钥标准规定凭据作用域 (RP ID) 必须绑定至有效域名，禁止将裸 IP 地址（' + window.location.hostname + '）作为通行密钥凭据作用域。\n\n请通过系统配置的 HTTPS 域名（如 https://your-domain.com）访问后再添加通行密钥。');
       return false;
     }
     return true;

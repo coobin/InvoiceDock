@@ -15,7 +15,7 @@ Compose 默认以主机 UID/GID `1000:1000` 运行容器。若部署账号不同
 
 ```dotenv
 APP_SECRET=<openssl rand -hex 32 的输出>
-ADMIN_USERNAME=kay
+ADMIN_USERNAME=admin
 ADMIN_PASSWORD=<独立的高强度初始密码>
 APP_BASE_URL=https://invoice.example.com
 SESSION_HTTPS_ONLY=true
