@@ -54,16 +54,6 @@ class Settings(BaseSettings):
     # 逗号分隔的预设通用邀请码（例如 "DEMO-2026,INVOICE-VIP"）
     registration_invite_codes: str = ""
 
-    # SMTP 邮件服务（用于注册邮箱验证码，支持 QQ 邮箱、163 邮箱等）
-    smtp_host: str = "smtp.qq.com"
-    smtp_port: int = 465
-    smtp_user: str = ""
-    smtp_password: str = ""
-    smtp_from_name: str = "InvoiceDock · 票舱"
-    smtp_from_email: str = ""
-    smtp_use_ssl: bool = True
-    email_verification_required: bool = False
-
     @property
     def github_enabled(self) -> bool:
         return bool(self.github_client_id.strip() and self.github_client_secret.strip())
@@ -75,14 +65,6 @@ class Settings(BaseSettings):
     @property
     def invite_required(self) -> bool:
         return self.registration_invite_required or bool(self.registration_invite_codes.strip())
-
-    @property
-    def smtp_configured(self) -> bool:
-        return bool(self.smtp_host.strip() and self.smtp_user.strip() and self.smtp_password.strip())
-
-    @property
-    def require_email_verification(self) -> bool:
-        return self.email_verification_required or self.smtp_configured
 
     max_upload_mb: int = 25
     max_user_storage_mb: int = 2048

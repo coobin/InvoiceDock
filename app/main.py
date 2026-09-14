@@ -25,7 +25,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.exception_handlers import http_exception_handler
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, or_, select
@@ -79,10 +79,6 @@ from app.services.captcha_service import (
     generate_captcha_text,
     store_captcha,
     verify_captcha,
-)
-from app.services.email_verification_service import (
-    send_registration_code,
-    verify_registration_code,
 )
 from app.services.export_service import make_invoice_workbook, make_preview, make_print_pdf
 from app.services.ingestion import extract_zip_candidates, ingest_bytes
@@ -621,35 +617,6 @@ async def login_submit(
     return RedirectResponse(next_path, status_code=303)
 
 
-@app.post("/auth/send-verification-code")
-async def send_verification_code_api(
-    request: Request,
-    db: Session = Depends(get_db),
-):
-    if not settings.registration_enabled:
-        return JSONResponse({"ok": False, "message": "注册已关闭"}, status_code=400)
-    form = await request.form()
-    validate_csrf(request, str(form.get("csrf_token", "")))
-    ip = client_ip(request)
-    if throttle_limit(f"send-code-ip:{ip}", 10, 3600):
-        return JSONResponse({"ok": False, "message": "发送验证码过于频繁，请稍后再试"}, status_code=429)
-
-    email = str(form.get("email", "")).strip().lower()
-    if not email or len(email) > 255 or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
-        return JSONResponse({"ok": False, "message": "请输入有效的邮箱地址"}, status_code=400)
-
-    existing = db.scalar(
-        select(User.id).where(or_(func.lower(User.username) == email, func.lower(User.email) == email))
-    )
-    if existing:
-        return JSONResponse({"ok": False, "message": "该邮箱已注册，请直接登录"}, status_code=400)
-
-    ok, msg = send_registration_code(db, email, ip)
-    if not ok:
-        return JSONResponse({"ok": False, "message": msg}, status_code=400)
-    return JSONResponse({"ok": True, "message": msg})
-
-
 @app.get("/register", response_class=HTMLResponse)
 def register_page(request: Request, next: str = "/", db: Session = Depends(get_db)):  # noqa: A002
     if not settings.registration_enabled:
@@ -664,7 +631,6 @@ def register_page(request: Request, next: str = "/", db: Session = Depends(get_d
             next_path=next if next.startswith("/") and not next.startswith("//") else "/",
             registration_enabled=settings.registration_enabled,
             invite_required=is_invite_code_required(),
-            email_verification_required=settings.require_email_verification,
             google_enabled=settings.google_enabled,
             github_enabled=settings.github_enabled,
             oidc_enabled=oidc_enabled(db),
@@ -703,14 +669,6 @@ async def register_submit(
     if len(email) > 255 or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
         flash(request, "请输入有效的邮箱地址", "error")
         return RedirectResponse("/register", status_code=303)
-
-    # 邮箱验证码校验
-    if settings.require_email_verification:
-        v_code = str(form.get("verification_code", "")).strip()
-        v_ok, v_err = verify_registration_code(db, email, v_code)
-        if not v_ok:
-            flash(request, v_err, "error")
-            return RedirectResponse("/register", status_code=303)
     if len(display_name) > 160:
         flash(request, "显示名称不能超过 160 个字符", "error")
         return RedirectResponse("/register", status_code=303)

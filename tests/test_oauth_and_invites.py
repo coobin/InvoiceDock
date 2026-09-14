@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
-from app import config
+from app import config, main
 from app.db import Base
 from app.main import (
     OAuthLoginDenied,
@@ -217,11 +217,16 @@ def test_oauth_user_denies_conflict_and_inactive(db_session):
 
 
 @pytest.mark.asyncio
-async def test_oauth_endpoints_raise_404_when_disabled():
+async def test_oauth_endpoints_raise_404_when_disabled(monkeypatch):
     from fastapi import HTTPException
     from starlette.requests import Request
 
     from app.main import github_login, google_login
+
+    monkeypatch.setattr(main.settings, "google_client_id", "")
+    monkeypatch.setattr(main.settings, "google_client_secret", "")
+    monkeypatch.setattr(main.settings, "github_client_id", "")
+    monkeypatch.setattr(main.settings, "github_client_secret", "")
 
     req = Request(
         {
