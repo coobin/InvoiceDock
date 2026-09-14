@@ -11,7 +11,14 @@
     {% for item in users %}
       <tr>
         <td><strong>{{ item.display_name or item.username }}</strong><small class="mono">{{ item.username }}</small><small>{{ item.email or '未设置邮箱' }}</small></td>
-        <td>{{ 'OIDC' if item.oidc_subject else '本地密码' }}</td>
+        <td>
+          {% if item.oidc_subject %}
+            {% if item.oidc_subject.startswith('github|') %}GitHub
+            {% elif item.oidc_subject.startswith('google|') %}Google
+            {% else %}OIDC
+            {% endif %}
+          {% else %}本地密码{% endif %}
+        </td>
         <td><span class="status {{ 'verified' if item.active else 'failed' }}">{{ '启用' if item.active else '已停用' }}</span><small>{{ '管理员' if item.role == 'admin' else '成员' }}</small></td>
         <td class="mono">{{ item.last_login_at.strftime('%Y-%m-%d %H:%M') if item.last_login_at else '从未登录' }}</td>
         <td><strong class="mono">{{ usage.get(item.id, 0) }} / {{ daily_limit }}</strong></td>

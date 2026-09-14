@@ -41,6 +41,7 @@ from app.db import SessionLocal, get_db, init_db
 from app.models import (
     AuditLog,
     ExpenseItem,
+    InviteCode,
     Invoice,
     JobLog,
     Mailbox,
@@ -81,6 +82,13 @@ from app.services.captcha_service import (
 )
 from app.services.export_service import make_invoice_workbook, make_preview, make_print_pdf
 from app.services.ingestion import extract_zip_candidates, ingest_bytes
+from app.services.invite_service import (
+    create_invite_code,
+    disable_invite_code,
+    is_invite_code_required,
+    list_invite_codes,
+    validate_and_consume_invite_code,
+)
 from app.services.mail_service import scan_all_mailboxes, sync_mailbox, test_mailbox
 from app.services.network_security import validate_outbound_host
 from app.services.notification_service import (
@@ -138,6 +146,26 @@ if settings.oidc_enabled and settings.oidc_issuer and settings.oidc_client_id:
         client_secret=settings.oidc_client_secret,
         server_metadata_url=f"{settings.oidc_issuer}/.well-known/openid-configuration",
         client_kwargs={"scope": settings.oidc_scopes},
+    )
+
+if settings.google_enabled:
+    oauth.register(
+        name="google",
+        client_id=settings.google_client_id,
+        client_secret=settings.google_client_secret,
+        server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+        client_kwargs={"scope": "openid email profile"},
+    )
+
+if settings.github_enabled:
+    oauth.register(
+        name="github",
+        client_id=settings.github_client_id,
+        client_secret=settings.github_client_secret,
+        api_base_url="https://api.github.com/",
+        authorize_url="https://github.com/login/oauth/authorize",
+        access_token_url="https://github.com/login/oauth/access_token",
+        client_kwargs={"scope": "read:user user:email"},
     )
 
 
@@ -205,10 +233,18 @@ async def lifespan(_app: FastAPI):
     for directory in (settings.data_dir, settings.upload_dir, settings.preview_dir, settings.export_dir):
         directory.mkdir(parents=True, exist_ok=True)
     init_db()
-    if settings.oidc_enabled and oauth.oidc:
+    if settings.oidc_enabled and getattr(oauth, "oidc", None):
         oauth.oidc.framework.set_state_data = _oidc_set_state_data
         oauth.oidc.framework.get_state_data = _oidc_get_state_data
         oauth.oidc.framework.clear_state_data = _oidc_clear_state_data
+    if settings.google_enabled and getattr(oauth, "google", None):
+        oauth.google.framework.set_state_data = _oidc_set_state_data
+        oauth.google.framework.get_state_data = _oidc_get_state_data
+        oauth.google.framework.clear_state_data = _oidc_clear_state_data
+    if settings.github_enabled and getattr(oauth, "github", None):
+        oauth.github.framework.set_state_data = _oidc_set_state_data
+        oauth.github.framework.get_state_data = _oidc_get_state_data
+        oauth.github.framework.clear_state_data = _oidc_clear_state_data
     with SessionLocal() as db:
         created = bootstrap_admin(db)
         if created:
@@ -476,6 +512,8 @@ def login_page(request: Request, next: str = "/", db: Session = Depends(get_db))
             request,
             next_path=next if next.startswith("/") and not next.startswith("//") else "/",
             oidc_enabled=oidc_enabled(db),
+            google_enabled=settings.google_enabled,
+            github_enabled=settings.github_enabled,
             registration_enabled=settings.registration_enabled,
             require_captcha=need_captcha,
         ),
@@ -592,6 +630,10 @@ def register_page(request: Request, next: str = "/", db: Session = Depends(get_d
             request,
             next_path=next if next.startswith("/") and not next.startswith("//") else "/",
             registration_enabled=settings.registration_enabled,
+            invite_required=is_invite_code_required(),
+            google_enabled=settings.google_enabled,
+            github_enabled=settings.github_enabled,
+            oidc_enabled=oidc_enabled(db),
         ),
     )
 
@@ -610,6 +652,16 @@ async def register_submit(
     if throttle_limit(f"register:{ip}", 5, 3600):
         flash(request, "注册尝试过于频繁，请稍后再试", "error")
         return RedirectResponse("/register", status_code=303)
+
+    # 注册邀请码校验
+    invite_source = None
+    if is_invite_code_required():
+        invite_code = str(form.get("invite_code", "")).strip()
+        valid, reason = validate_and_consume_invite_code(db, invite_code)
+        if not valid:
+            flash(request, reason, "error")
+            return RedirectResponse("/register", status_code=303)
+        invite_source = reason
     email = str(form.get("email", "")).strip().lower()
     display_name = str(form.get("display_name", "")).strip()
     password = str(form.get("password", ""))
@@ -656,7 +708,7 @@ async def register_submit(
         db.rollback()
         flash(request, "该邮箱已注册，请直接登录", "error")
         return RedirectResponse("/register", status_code=303)
-    record_audit(db, request, None, "auth.register", details={"username": email})
+    record_audit(db, request, None, "auth.register", details={"username": email, "invite": invite_source})
     background_tasks.add_task(
         notify_event_background,
         "register",
@@ -876,6 +928,319 @@ async def oidc_callback(
         "login",
         "InvoiceDock · 用户登录",
         f"账号：{_notification_user_label(user)}\n方式：OIDC",
+    )
+    return RedirectResponse(next_path, status_code=303)
+
+
+class OAuthLoginDenied(Exception):
+    def __init__(self, message: str, reason: str):
+        super().__init__(message)
+        self.message = message
+        self.reason = reason
+
+
+def _oauth_user_for_provider(
+    db: Session,
+    provider: str,
+    subject_id: str,
+    email: str | None,
+    name: str | None,
+    preferred_username: str | None = None,
+) -> tuple[User, bool]:
+    subject_id = str(subject_id or "").strip()
+    if not subject_id:
+        raise OAuthLoginDenied(f"{provider.capitalize()} 未返回有效的用户标识", "missing_subject")
+
+    oidc_subject = f"{provider}|{subject_id}"
+    user = db.scalar(select(User).where(User.oidc_subject == oidc_subject))
+
+    clean_email = str(email or "").strip().lower()
+    if clean_email and (len(clean_email) > 255 or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", clean_email)):
+        clean_email = ""
+
+    if user:
+        if not user.active:
+            raise OAuthLoginDenied("该账号已停用，请联系管理员", "inactive")
+        if clean_email and not user.email:
+            user.email = clean_email
+        if name and not user.display_name:
+            user.display_name = name[:160]
+        db.commit()
+        return user, False
+
+    if clean_email:
+        existing = db.scalar(
+            select(User).where(
+                or_(
+                    func.lower(User.email) == clean_email,
+                    func.lower(User.username) == clean_email,
+                )
+            )
+        )
+        if existing:
+            if existing.oidc_subject and existing.oidc_subject != oidc_subject:
+                bound_prov = existing.oidc_subject.split("|")[0]
+                raise OAuthLoginDenied(
+                    f"该邮箱已绑定其他登录方式（{bound_prov}），请使用原方式登录或联系管理员",
+                    "email_conflict",
+                )
+            if not existing.active:
+                raise OAuthLoginDenied("该账号已停用，请联系管理员", "inactive")
+            existing.oidc_subject = oidc_subject
+            if not existing.display_name and name:
+                existing.display_name = name[:160]
+            db.commit()
+            return existing, False
+
+    pref = str(preferred_username or "").strip()
+    if pref and is_reserved_username(pref):
+        pref = ""
+
+    base_name = pref or (clean_email.split("@")[0] if clean_email else f"{provider}-{secrets.token_hex(4)}")
+    base_name = re.sub(r"[^\w\-\.]", "_", base_name)[:120] or f"{provider}-{secrets.token_hex(4)}"
+
+    username = base_name
+    suffix = 1
+    while db.scalar(select(User.id).where(func.lower(User.username) == username.lower())):
+        suffix += 1
+        username = f"{base_name[: 119 - len(str(suffix))]}-{suffix}"
+
+    display_name = (name or pref or username)[:160]
+    user = User(
+        username=username,
+        email=clean_email or None,
+        display_name=display_name,
+        oidc_subject=oidc_subject,
+        role="member",
+    )
+    db.add(user)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise OAuthLoginDenied(
+            f"{provider.capitalize()} 账号创建发生冲突，请重试或联系管理员",
+            "identity_conflict",
+        ) from exc
+    return user, True
+
+
+@app.get("/auth/google/login")
+async def google_login(request: Request):
+    if not settings.google_enabled or not getattr(oauth, "google", None):
+        raise HTTPException(status_code=404, detail="Google 登录未启用")
+    redirect_uri = f"{settings.app_base_url}/auth/google/callback"
+    next_path = str(request.query_params.get("next", "/"))
+    if not next_path.startswith("/") or next_path.startswith("//"):
+        next_path = "/"
+    response = await oauth.google.authorize_redirect(request, redirect_uri)
+    match = re.search(r"state=([^&]+)", response.headers.get("location", ""))
+    if match:
+        with SessionLocal() as db:
+            row = db.get(OAuthState, match.group(1))
+            if row:
+                row.data = {**row.data, "next": next_path}
+                db.commit()
+    return response
+
+
+@app.get("/auth/google/callback")
+async def google_callback(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    if not settings.google_enabled or not getattr(oauth, "google", None):
+        raise HTTPException(status_code=404, detail="Google 登录未启用")
+    state = str(request.query_params.get("state", ""))
+    next_path = "/"
+    if state:
+        row = db.get(OAuthState, state)
+        if row:
+            next_path = str(row.data.get("next", "/"))
+            if not next_path.startswith("/") or next_path.startswith("//"):
+                next_path = "/"
+    try:
+        token = await oauth.google.authorize_access_token(request)
+        userinfo = token.get("userinfo")
+        if not userinfo:
+            resp = await oauth.google.get("https://openidconnect.googleapis.com/v1/userinfo", token=token)
+            userinfo = resp.json()
+    except OAuthError as exc:
+        record_audit(
+            db,
+            request,
+            None,
+            "auth.google_login_failed",
+            details={"reason": "provider_error"},
+        )
+        flash(request, f"Google 登录失败：{exc.error}", "error")
+        return RedirectResponse("/admin", status_code=303)
+
+    subject_id = str(userinfo.get("sub") or "")
+    email = str(userinfo.get("email") or "")
+    email_verified = userinfo.get("email_verified") is True or str(userinfo.get("email_verified")).lower() == "true"
+    name = str(userinfo.get("name") or userinfo.get("given_name") or "")
+
+    if not email_verified:
+        email = ""
+
+    try:
+        user, created_user = _oauth_user_for_provider(
+            db=db,
+            provider="google",
+            subject_id=subject_id,
+            email=email if email else None,
+            name=name,
+            preferred_username=email.split("@")[0] if email else None,
+        )
+    except OAuthLoginDenied as exc:
+        record_audit(
+            db,
+            request,
+            None,
+            "auth.google_login_failed",
+            details={"reason": exc.reason},
+        )
+        flash(request, exc.message, "error")
+        return RedirectResponse("/admin", status_code=303)
+
+    start_user_session(request, user)
+    mark_login(user, db)
+    record_audit(db, request, user, "auth.google_login")
+    if created_user:
+        background_tasks.add_task(
+            notify_event_background,
+            "register",
+            "InvoiceDock · 新用户注册",
+            f"账号：{_notification_user_label(user)}\n来源：Google",
+        )
+    background_tasks.add_task(
+        notify_event_background,
+        "login",
+        "InvoiceDock · 用户登录",
+        f"账号：{_notification_user_label(user)}\n方式：Google",
+    )
+    return RedirectResponse(next_path, status_code=303)
+
+
+@app.get("/auth/github/login")
+async def github_login(request: Request):
+    if not settings.github_enabled or not getattr(oauth, "github", None):
+        raise HTTPException(status_code=404, detail="GitHub 登录未启用")
+    redirect_uri = f"{settings.app_base_url}/auth/github/callback"
+    next_path = str(request.query_params.get("next", "/"))
+    if not next_path.startswith("/") or next_path.startswith("//"):
+        next_path = "/"
+    response = await oauth.github.authorize_redirect(request, redirect_uri)
+    match = re.search(r"state=([^&]+)", response.headers.get("location", ""))
+    if match:
+        with SessionLocal() as db:
+            row = db.get(OAuthState, match.group(1))
+            if row:
+                row.data = {**row.data, "next": next_path}
+                db.commit()
+    return response
+
+
+@app.get("/auth/github/callback")
+async def github_callback(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    if not settings.github_enabled or not getattr(oauth, "github", None):
+        raise HTTPException(status_code=404, detail="GitHub 登录未启用")
+    state = str(request.query_params.get("state", ""))
+    next_path = "/"
+    if state:
+        row = db.get(OAuthState, state)
+        if row:
+            next_path = str(row.data.get("next", "/"))
+            if not next_path.startswith("/") or next_path.startswith("//"):
+                next_path = "/"
+    try:
+        token = await oauth.github.authorize_access_token(request)
+        resp = await oauth.github.get("user", token=token)
+        gh_user = resp.json()
+    except OAuthError as exc:
+        record_audit(
+            db,
+            request,
+            None,
+            "auth.github_login_failed",
+            details={"reason": "provider_error"},
+        )
+        flash(request, f"GitHub 登录失败：{exc.error}", "error")
+        return RedirectResponse("/admin", status_code=303)
+    except Exception:
+        record_audit(
+            db,
+            request,
+            None,
+            "auth.github_login_failed",
+            details={"reason": "fetch_user_failed"},
+        )
+        flash(request, "获取 GitHub 用户信息失败", "error")
+        return RedirectResponse("/admin", status_code=303)
+
+    subject_id = str(gh_user.get("id") or "")
+    preferred_username = str(gh_user.get("login") or "")
+    name = str(gh_user.get("name") or preferred_username or "")
+    email = str(gh_user.get("email") or "").strip()
+
+    if not email:
+        try:
+            resp_emails = await oauth.github.get("user/emails", token=token)
+            emails_data = resp_emails.json()
+            if isinstance(emails_data, list):
+                for item in emails_data:
+                    if item.get("primary") and item.get("verified"):
+                        email = str(item.get("email") or "").strip()
+                        break
+                if not email:
+                    for item in emails_data:
+                        if item.get("verified"):
+                            email = str(item.get("email") or "").strip()
+                            break
+        except Exception:
+            pass
+
+    try:
+        user, created_user = _oauth_user_for_provider(
+            db=db,
+            provider="github",
+            subject_id=subject_id,
+            email=email if email else None,
+            name=name,
+            preferred_username=preferred_username,
+        )
+    except OAuthLoginDenied as exc:
+        record_audit(
+            db,
+            request,
+            None,
+            "auth.github_login_failed",
+            details={"reason": exc.reason},
+        )
+        flash(request, exc.message, "error")
+        return RedirectResponse("/admin", status_code=303)
+
+    start_user_session(request, user)
+    mark_login(user, db)
+    record_audit(db, request, user, "auth.github_login")
+    if created_user:
+        background_tasks.add_task(
+            notify_event_background,
+            "register",
+            "InvoiceDock · 新用户注册",
+            f"账号：{_notification_user_label(user)}\n来源：GitHub",
+        )
+    background_tasks.add_task(
+        notify_event_background,
+        "login",
+        "InvoiceDock · 用户登录",
+        f"账号：{_notification_user_label(user)}\n方式：GitHub",
     )
     return RedirectResponse(next_path, status_code=303)
 
@@ -2046,6 +2411,107 @@ async def admin_user_reset_password(
     record_audit(db, request, actor, "user.password_reset", "user", target.id)
     flash(request, f"已重置 {target.username} 的本地密码，旧会话已全部失效")
     return RedirectResponse("/admin/users", status_code=303)
+
+
+@app.get("/admin/invites", response_class=HTMLResponse)
+def admin_invites_page(request: Request, db: Session = Depends(get_db)):
+    user = require_page_admin(request, db)
+    invites = list_invite_codes(db)
+    env_codes = [c.strip().upper() for c in (settings.registration_invite_codes or "").split(",") if c.strip()]
+    return templates.TemplateResponse(
+        request,
+        "admin_invites.html",
+        context(
+            request,
+            user,
+            page="admin_invites",
+            invites=invites,
+            now=utcnow(),
+            invite_required=settings.invite_required,
+            env_codes=env_codes,
+        ),
+    )
+
+
+@app.post("/admin/invites")
+async def admin_create_invite(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    actor = require_page_admin(request, db)
+    form = await request.form()
+    validate_csrf(request, str(form.get("csrf_token", "")))
+
+    code_input = str(form.get("code", "")).strip().upper()
+    try:
+        max_uses = int(form.get("max_uses", 1))
+        if max_uses <= 0:
+            max_uses = 1
+    except (TypeError, ValueError):
+        max_uses = 1
+
+    try:
+        expires_days = int(form.get("expires_days", 0) or 0)
+    except (TypeError, ValueError):
+        expires_days = 0
+
+    note = str(form.get("note", "")).strip()[:255]
+    expires_at = utcnow() + timedelta(days=expires_days) if expires_days > 0 else None
+
+    if code_input:
+        existing = db.scalar(select(InviteCode).where(InviteCode.code == code_input))
+        if existing:
+            flash(request, f"邀请码 {code_input} 已存在，请更换", "error")
+            return RedirectResponse("/admin/invites", status_code=303)
+
+    invite = create_invite_code(
+        db,
+        code=code_input or None,
+        max_uses=max_uses,
+        note=note,
+        expires_at=expires_at,
+        creator_id=actor.username,
+    )
+    record_audit(
+        db,
+        request,
+        actor,
+        "invite.created",
+        "invite_code",
+        str(invite.id),
+        {"code": invite.code, "max_uses": invite.max_uses, "expires_at": expires_at.isoformat() if expires_at else None},
+    )
+    flash(request, f"成功创建邀请码：{invite.code}")
+    return RedirectResponse("/admin/invites", status_code=303)
+
+
+@app.post("/admin/invites/{invite_id}/disable")
+async def admin_disable_invite(
+    invite_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    actor = require_page_admin(request, db)
+    form = await request.form()
+    validate_csrf(request, str(form.get("csrf_token", "")))
+
+    invite = db.get(InviteCode, invite_id)
+    if not invite:
+        flash(request, "未找到该邀请码", "error")
+        return RedirectResponse("/admin/invites", status_code=303)
+
+    disable_invite_code(db, invite_id)
+    record_audit(
+        db,
+        request,
+        actor,
+        "invite.disabled",
+        "invite_code",
+        str(invite.id),
+        {"code": invite.code},
+    )
+    flash(request, f"已停用邀请码 {invite.code}")
+    return RedirectResponse("/admin/invites", status_code=303)
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block title %}邀请码管理 · {{ app_name }}{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div>
+    <span class="eyebrow">ACCESS CONTROL / 注册邀请</span>
+    <h1>注册邀请码</h1>
+    <p>生成与管理用户注册邀请码。开启邀请码强制校验后，仅持有有效邀请码的用户可注册新账号；第三方登录不受影响。</p>
+  </div>
+</header>
+
+<div class="panel-grid-compact" style="display: grid; grid-template-columns: 340px 1fr; gap: 24px; margin-bottom: 24px;">
+  <section class="action-card" style="background: #fff; padding: 24px; border: 1px solid var(--rule); border-radius: 8px;">
+    <h3>生成新邀请码</h3>
+    <form action="/admin/invites" method="post" class="stack-form" style="margin-top: 16px;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <label>自定义邀请码（留空随机生成）
+        <input name="code" placeholder="如 VIP-2026（留空自动生成）" style="font-family: var(--font-mono); text-transform: uppercase;">
+      </label>
+      <label>可用次数
+        <input type="number" name="max_uses" value="1" min="1" max="10000" required>
+      </label>
+      <label>有效天数（留空或 0 为永久）
+        <input type="number" name="expires_days" placeholder="0 表示永久有效" min="0" max="3650">
+      </label>
+      <label>备注说明
+        <input name="note" placeholder="如：财务部、外部试用">
+      </label>
+      <button class="button primary small" type="submit" style="margin-top: 8px;">+ 生成邀请码</button>
+    </form>
+  </section>
+
+  <section class="stat-card" style="background: #fff; padding: 24px; border: 1px solid var(--rule); border-radius: 8px;">
+    <h3>机制与状态说明</h3>
+    <div style="margin-top: 16px; font-size: 13px; line-height: 1.8;">
+      <p><strong>注册邀请校验：</strong>
+        {% if invite_required %}
+          <span class="status verified">已强制启用（必须凭邀请码注册）</span>
+        {% else %}
+          <span class="status failed">未强制（开放普通注册）</span>
+        {% endif %}
+      </p>
+      <p><small class="muted">可通过环境变量 <code>REGISTRATION_INVITE_REQUIRED=true</code> 控制是否全局强制校验。</small></p>
+      {% if env_codes %}
+      <div style="margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--rule);">
+        <strong>环境变量预设通用邀请码（多用户复用）：</strong>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px;">
+          {% for ec in env_codes %}
+            <span class="badge mono" style="background: #eef4f8; padding: 4px 10px; border-radius: 4px; border: 1px solid #d4e3ed; font-weight: 600;">{{ ec }}</span>
+          {% endfor %}
+        </div>
+        <p><small class="muted">环境变量预设码允许多次使用，不受数据库使用次数限制。</small></p>
+      </div>
+      {% endif %}
+      <div style="margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--rule);">
+        <strong>第三方登录免邀请码：</strong>
+        <p><small class="muted">使用 Google 或 GitHub 账号直接登录的用户，因已在外部通过身份与邮箱认证，不强制要求邀请码，系统将自动创建并激活账号。</small></p>
+      </div>
+    </div>
+  </section>
+</div>
+
+<section class="table-panel">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>邀请码</th>
+        <th>已用 / 可用次数</th>
+        <th>状态</th>
+        <th>备注</th>
+        <th>过期时间</th>
+        <th>创建者 / 时间</th>
+        <th>操作</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for item in invites %}
+      <tr>
+        <td><strong class="mono" style="font-size: 15px; letter-spacing: 0.06em; color: var(--carbon);">{{ item.code }}</strong></td>
+        <td class="mono"><strong>{{ item.used_count }}</strong> / {{ item.max_uses }}</td>
+        <td>
+          {% if item.status == 'active' %}
+            {% if item.used_count >= item.max_uses %}
+              <span class="status failed">已用尽</span>
+            {% elif item.expires_at and item.expires_at < now %}
+              <span class="status failed">已过期</span>
+            {% else %}
+              <span class="status verified">有效</span>
+            {% endif %}
+          {% else %}
+            <span class="status failed">已停用</span>
+          {% endif %}
+        </td>
+        <td>{{ item.note or '-' }}</td>
+        <td class="mono">{{ item.expires_at.strftime('%Y-%m-%d %H:%M') if item.expires_at else '永久有效' }}</td>
+        <td><small>{{ item.created_by or '系统' }}</small><br><small class="mono muted">{{ item.created_at.strftime('%Y-%m-%d %H:%M') }}</small></td>
+        <td>
+          {% if item.status == 'active' and (item.used_count < item.max_uses) and (not item.expires_at or item.expires_at >= now) %}
+          <form action="/admin/invites/{{ item.id }}/disable" method="post" data-confirm="确定停用邀请码 {{ item.code }} 吗？">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+            <button class="button secondary small">停用</button>
+          </form>
+          {% else %}
+          <span class="muted">-</span>
+          {% endif %}
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7"><div class="empty small"><h3>暂无数据库邀请码</h3></div></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

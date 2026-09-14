@@ -148,6 +148,16 @@ label input, label select, label textarea { display: block; margin-top: 5px; col
 .login-divider::before { position: absolute; top: 50%; right: 0; left: 0; height: 1px; content: ""; background: var(--rule); }
 .login-divider span { position: relative; padding: 0 10px; color: #82939d; background: #fff; font-size: 11px; }
 .version { position: absolute; right: 30px; bottom: 22px; color: #8295a1; font: 9px var(--font-mono); }
+.oauth-login-panel { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+.oauth-button { display: flex; align-items: center; justify-content: center; gap: 10px; font-weight: 600; padding: 10px 16px; border-radius: 4px; transition: all .16s ease; text-decoration: none; font-size: 13px; }
+.oauth-icon { flex-shrink: 0; }
+.oauth-github { background: #24292f; color: #fff; border: 1px solid #24292f; }
+.oauth-github:hover { background: #000; color: #fff; border-color: #000; }
+.oauth-google { background: #fff; color: #3c4043; border: 1px solid #dadce0; }
+.oauth-google:hover { background: #f8f9fa; border-color: #c6c9cc; }
+.oauth-oidc { background: #edf4f8; color: var(--carbon); border: 1px solid #cbdde8; }
+.oauth-oidc:hover { background: #e0edf4; }
+.invite-input { font-family: var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; }
 
 /* Dashboard */
 .ledger-strip { display: grid; margin-bottom: 24px; overflow: hidden; grid-template-columns: 1.35fr repeat(3, 1fr); background: #fff; border: 1px solid var(--rule); border-radius: 8px; box-shadow: var(--shadow); }

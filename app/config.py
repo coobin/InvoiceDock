@@ -43,6 +43,29 @@ class Settings(BaseSettings):
     # Comma-separated additions to the built-in reserved username list.
     reserved_usernames: str = ""
 
+    # 第三方登录 (GitHub & Google OAuth)
+    github_client_id: str = ""
+    github_client_secret: str = ""
+    google_client_id: str = ""
+    google_client_secret: str = ""
+
+    # 注册邀请码机制：开启后注册必须提供有效邀请码
+    registration_invite_required: bool = False
+    # 逗号分隔的预设通用邀请码（例如 "DEMO-2026,INVOICE-VIP"）
+    registration_invite_codes: str = ""
+
+    @property
+    def github_enabled(self) -> bool:
+        return bool(self.github_client_id.strip() and self.github_client_secret.strip())
+
+    @property
+    def google_enabled(self) -> bool:
+        return bool(self.google_client_id.strip() and self.google_client_secret.strip())
+
+    @property
+    def invite_required(self) -> bool:
+        return self.registration_invite_required or bool(self.registration_invite_codes.strip())
+
     max_upload_mb: int = 25
     max_user_storage_mb: int = 2048
     max_user_daily_upload_files: int = 200
